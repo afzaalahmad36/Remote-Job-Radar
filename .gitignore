@@ -1,0 +1,31 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+.sessions/
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Frontend
+node_modules/
+.next/
+frontend/out/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
