@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 
 import pytest
@@ -8,8 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ExtractionStatus, Job, RemotePolicy, Source, SourceType, User
 
 
-async def make_source(session: AsyncSession, name: str = "feed") -> Source:
-    source = Source(type=SourceType.RSS, name=name)
+async def make_user(session: AsyncSession) -> User:
+    user = User(email=f"{uuid.uuid4()}@example.com", hashed_password="x")
+    session.add(user)
+    await session.flush()
+    return user
+
+
+async def make_source(
+    session: AsyncSession, name: str = "feed", owner: User | None = None
+) -> Source:
+    owner = owner or await make_user(session)
+    source = Source(user_id=owner.id, type=SourceType.RSS, name=name)
     session.add(source)
     await session.flush()
     return source
@@ -118,7 +129,33 @@ def test_enum_values() -> None:
 
 
 async def test_database_rejects_unknown_enum_value(db_session: AsyncSession) -> None:
-    with pytest.raises(DBAPIError):
+    owner = await make_user(db_session)  # so the enum is the only thing wrong with the row
+
+    with pytest.raises(DBAPIError, match="invalid input value for enum source_type"):
         await db_session.execute(
-            text("INSERT INTO sources (id, type, name) VALUES (gen_random_uuid(), 'bogus', 'x')")
+            text(
+                "INSERT INTO sources (id, user_id, type, name) "
+                "VALUES (gen_random_uuid(), :user_id, 'bogus', 'x')"
+            ),
+            {"user_id": owner.id},
         )
+
+
+async def test_a_source_must_have_an_owner(db_session: AsyncSession) -> None:
+    db_session.add(Source(type=SourceType.RSS, name="orphan"))
+
+    with pytest.raises(IntegrityError, match="user_id"):
+        await db_session.flush()
+
+
+async def test_deleting_a_user_deletes_their_sources_and_jobs(db_session: AsyncSession) -> None:
+    owner = await make_user(db_session)
+    source = await make_source(db_session, owner=owner)
+    db_session.add(make_job(source))
+    await db_session.flush()
+
+    await db_session.delete(owner)
+    await db_session.flush()
+
+    assert (await db_session.scalars(select(Source))).all() == []
+    assert (await db_session.scalars(select(Job))).all() == []

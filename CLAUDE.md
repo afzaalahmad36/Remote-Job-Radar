@@ -100,6 +100,7 @@ job-radar/
   - Models: persistence only. Schemas: API/LLM contracts only. Never return ORM models directly from endpoints.
 - **Async everywhere** in the API path. Never call blocking I/O (requests, sync DB drivers, `time.sleep`) inside `async def`. Use `httpx.AsyncClient`, async SQLAlchemy, `asyncio.sleep`.
 - **Celery tasks are thin:** they call a service function. Tasks must be **idempotent** (safe to retry) and deduplicate by `source + external_id`.
+- **Outbound requests to user-supplied URLs must pass `app/core/url_safety.py` (SSRF protection) immediately before every request and every redirect hop.** Checking only when the URL is saved is not enough: DNS and redirects can change later.
 - **LLM calls go through `app/llm/client.py` only.** Never call the SDK from elsewhere.
 - **LLM output is untrusted.** Always parse into a Pydantic schema; on validation failure retry once with the error message, then mark the job `extraction_failed`. Never `eval` or trust raw text.
 - **Config via environment only** (`app/core/config.py`). No hard-coded secrets, URLs or model names.
@@ -114,7 +115,7 @@ job-radar/
 | `users` | id, email (stored lowercase, unique), hashed_password (argon2id), created_at |
 | `refresh_tokens` | id, user_id, family_id, token_hash (SHA-256, unique), expires_at, revoked_at, created_at. One `family_id` per login; each refresh revokes the used token and issues a new one in the same family; replaying a used token revokes the whole family |
 | `cvs` | id, user_id, raw_text, parsed_json, embedding (vector), updated_at |
-| `sources` | id, type (`telegram`/`rss`), name, config (JSONB), is_active, last_synced_at |
+| `sources` | id, user_id (FK users, ON DELETE CASCADE, indexed), type (`telegram`/`rss`), name, config (JSONB; RSS requires `url`, unknown keys rejected), is_active, last_synced_at. A user only ever sees their own sources (others' are 404, never 403). A user cannot have two RSS sources with the same normalized URL (lowercase host, no default port, trailing slash or fragment): 409 `duplicate_source`, checked in the service, not by a DB constraint. Prefer `is_active=false` over deleting: deleting a source cascades to its jobs |
 | `jobs` | id, source_id, external_id, raw_text, title, company, stack (array), seniority, salary_min/max/currency, remote_policy, apply_email, apply_url, posted_at, embedding (vector), extraction_status, created_at. **Unique:** (source_id, external_id) |
 | `job_matches` | id, user_id, job_id, score (0-100), reasons (JSONB), missing_skills (array), created_at. **Unique:** (user_id, job_id) |
 | `applications` | id, user_id, job_id, status (enum), email_draft, sent_at, notes, updated_at |

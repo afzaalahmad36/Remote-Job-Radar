@@ -23,6 +23,14 @@ async def register_and_login(client: AsyncClient) -> dict[str, Any]:
     return tokens
 
 
+async def auth_headers(client: AsyncClient, email: str = EMAIL) -> dict[str, str]:
+    """Register `email` (if new), log in, and return the Authorization header for it."""
+    await register(client, email=email)
+    response = await login(client, email=email)
+    assert response.status_code == 200
+    return bearer(response.json()["access_token"])
+
+
 async def refresh(client: AsyncClient, refresh_token: str) -> Response:
     return await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
 
