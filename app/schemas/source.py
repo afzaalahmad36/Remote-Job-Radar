@@ -61,5 +61,6 @@ class SourceRead(BaseModel):
     config: dict[str, Any]
     is_active: bool
     last_synced_at: datetime | None
+    last_error: str | None  # why the last sync failed (short, sanitized); null if it worked
     created_at: datetime
     updated_at: datetime

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Remote Jobs (Atom)</title>
+  <link href="https://example.org/"/>
+  <updated>2026-10-26T12:00:00Z</updated>
+  <id>tag:example.org,2026:feed</id>
+  <entry>
+    <title>Backend Engineer, Go</title>
+    <link href="https://example.org/jobs/a1"/>
+    <id>tag:example.org,2026:job-a1</id>
+    <updated>2026-10-26T10:00:00+01:00</updated>
+    <summary type="html">&lt;p&gt;Short summary of the Go role.&lt;/p&gt;</summary>
+    <content type="html">&lt;p&gt;Full description: build &lt;b&gt;distributed&lt;/b&gt; systems in Go.&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>Data Scientist</title>
+    <link href="https://example.org/jobs/a2"/>
+    <id>tag:example.org,2026:job-a2</id>
+    <published>2026-10-25T18:00:00-04:00</published>
+    <updated>2026-10-26T08:00:00Z</updated>
+    <summary>Plain text summary for the data role.</summary>
+  </entry>
+</feed>

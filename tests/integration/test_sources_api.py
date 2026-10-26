@@ -437,6 +437,82 @@ async def test_a_rejected_update_changes_nothing_at_all(
     )
 
 
+# --- changing the URL resets the sync state ------------------------------------------------------
+
+
+async def stale_sync_state(db_session: AsyncSession, source_id: str) -> Source:
+    row = await db_session.get(Source, uuid.UUID(source_id))
+    assert row is not None
+    row.etag, row.last_modified, row.last_error = (
+        '"v1"',
+        "Mon, 26 Oct 2026 10:00:00 GMT",
+        "HTTP 500",
+    )
+    await db_session.flush()
+    return row
+
+
+@pytest.mark.parametrize(
+    "new_url",
+    ["https://feeds.example.org/rss", "https://example.com/feed.xml/"],
+    ids=["different-feed", "same-feed-written-differently"],
+)
+async def test_changing_the_url_clears_etag_last_modified_and_last_error(
+    db_client: AsyncClient, db_session: AsyncSession, ann: dict[str, str], new_url: str
+) -> None:
+    source_id = (await create(db_client, ann)).json()["id"]
+    row = await stale_sync_state(db_session, source_id)
+
+    response = await db_client.patch(
+        f"{SOURCES}/{source_id}", json={"config": {"url": new_url}}, headers=ann
+    )
+    await db_session.refresh(row)
+
+    assert response.status_code == 200
+    assert (row.etag, row.last_modified, row.last_error) == (None, None, None)
+    assert response.json()["last_error"] is None
+
+
+async def test_a_rejected_url_change_keeps_the_sync_state(
+    db_client: AsyncClient, db_session: AsyncSession, ann: dict[str, str]
+) -> None:
+    source_id = (await create(db_client, ann)).json()["id"]
+    row = await stale_sync_state(db_session, source_id)
+
+    response = await db_client.patch(
+        f"{SOURCES}/{source_id}", json={"config": {"url": "http://localhost/"}}, headers=ann
+    )
+    await db_session.refresh(row)
+
+    assert response.status_code == 422
+    assert (row.etag, row.last_error) == ('"v1"', "HTTP 500")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "Renamed"},
+        {"is_active": False},
+        {"config": {"url": "https://example.com/feed.xml"}},
+    ],
+    ids=["rename", "deactivate", "same-config"],
+)
+async def test_updates_that_keep_the_url_keep_the_sync_state(
+    db_client: AsyncClient, db_session: AsyncSession, ann: dict[str, str], body: dict[str, Any]
+) -> None:
+    source_id = (await create(db_client, ann)).json()["id"]
+    row = await stale_sync_state(db_session, source_id)
+
+    await db_client.patch(f"{SOURCES}/{source_id}", json=body, headers=ann)
+    await db_session.refresh(row)
+
+    assert (row.etag, row.last_modified, row.last_error) == (
+        '"v1"',
+        "Mon, 26 Oct 2026 10:00:00 GMT",
+        "HTTP 500",
+    )
+
+
 # --- duplicates: one source per user per normalized URL ----------------------------------------
 
 

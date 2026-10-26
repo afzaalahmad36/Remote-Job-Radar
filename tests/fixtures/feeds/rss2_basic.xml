@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Remote Jobs Board</title>
+    <link>https://example.com/</link>
+    <description>Fully remote jobs</description>
+    <item>
+      <title>Senior Python Engineer at Acme</title>
+      <link>https://example.com/jobs/101</link>
+      <guid isPermaLink="false">job-101</guid>
+      <pubDate>Mon, 26 Oct 2026 14:30:00 +0200</pubDate>
+      <description>&lt;p&gt;We are hiring a &lt;strong&gt;Senior Python Engineer&lt;/strong&gt;.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;FastAPI&lt;/li&gt;&lt;li&gt;PostgreSQL&lt;/li&gt;&lt;/ul&gt;</description>
+    </item>
+    <item>
+      <title>Frontend Developer (React) at Globex</title>
+      <link>https://example.com/jobs/102</link>
+      <guid isPermaLink="false">job-102</guid>
+      <pubDate>Tue, 27 Oct 2026 09:00:00 GMT</pubDate>
+      <description><![CDATA[<p>Build UIs with <em>React</em> and TypeScript. Salary: $90k &ndash; $120k.</p>]]></description>
+    </item>
+    <item>
+      <title>DevOps Engineer at Initech</title>
+      <link>https://example.com/jobs/103</link>
+      <guid isPermaLink="false">job-103</guid>
+      <pubDate>Wed, 28 Oct 2026 08:15:00 -0500</pubDate>
+      <description>Kubernetes, Terraform and a great team.</description>
+    </item>
+  </channel>
+</rss>

@@ -9,6 +9,8 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.32.0",
     "fastapi>=0.162.0",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
     "pydantic-settings>=2.16.1",
     "pydantic[email]>=2.14.1",
     "pyjwt>=2.15.1",
@@ -33,6 +35,11 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 strict = true
 files = ["app"]
 
+[[tool.mypy.overrides]]
+# feedparser ships no type hints; everything it returns is treated as Any and narrowed by us.
+module = ["feedparser"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 # "auto" lets async tests run without decorating each one with @pytest.mark.asyncio.
 asyncio_mode = "auto"
@@ -47,7 +54,6 @@ concurrency = ["greenlet", "thread"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "mypy>=2.4.0",
     "pre-commit>=4.7.0",
     "pytest>=9.1.1",

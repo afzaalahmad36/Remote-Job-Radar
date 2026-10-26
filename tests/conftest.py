@@ -8,12 +8,15 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.api_deps import get_resolver
+from app.api_deps import get_fetchers, get_resolver
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
+from app.ingestion.base import SourceFetcher
+from app.ingestion.rss import RssFetcher
 from app.main import create_app
+from app.models import SourceType
 from tests.db_utils import UnsafeDatabaseError, alembic_config, get_test_database_url
-from tests.fakes import FakeResolver
+from tests.fakes import FakeFeedServer, FakeResolver
 
 
 @pytest.fixture(scope="session")
@@ -45,10 +48,26 @@ def resolver() -> FakeResolver:
 
 
 @pytest.fixture
-def app(settings: Settings, resolver: FakeResolver) -> FastAPI:
+def feed_server() -> FakeFeedServer:
+    """The "internet" feeds are fetched from: tests register URLs on it and inspect requests."""
+    return FakeFeedServer()
+
+
+@pytest.fixture
+def fetchers(
+    resolver: FakeResolver, feed_server: FakeFeedServer
+) -> dict[SourceType, SourceFetcher]:
+    return {SourceType.RSS: RssFetcher(resolver=resolver, transport=feed_server.transport)}
+
+
+@pytest.fixture
+def app(
+    settings: Settings, resolver: FakeResolver, fetchers: dict[SourceType, SourceFetcher]
+) -> FastAPI:
     app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_resolver] = lambda: resolver
+    app.dependency_overrides[get_fetchers] = lambda: fetchers
     return app
 
 

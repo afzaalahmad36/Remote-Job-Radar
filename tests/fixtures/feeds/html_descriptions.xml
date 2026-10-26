@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>HTML-heavy feed</title>
+    <link>https://example.com/</link>
+    <description>Descriptions full of markup</description>
+    <item>
+      <title>R&amp;D Engineer &lt;b&gt;(Remote)&lt;/b&gt;</title>
+      <guid>html-1</guid>
+      <description>&lt;div&gt;&lt;h2&gt;About the role&lt;/h2&gt;&lt;p&gt;Work on &lt;a href="https://example.com/x" onclick="steal()"&gt;exciting&lt;/a&gt; things &amp;amp; more.&lt;/p&gt;&lt;script&gt;alert('xss')&lt;/script&gt;&lt;style&gt;body{display:none}&lt;/style&gt;&lt;p&gt;Line one&lt;br/&gt;Line two&lt;/p&gt;&lt;img src="x" onerror="alert(1)"/&gt;&lt;/div&gt;</description>
+    </item>
+    <item>
+      <title>Prefers the full content</title>
+      <guid>html-2</guid>
+      <description>Only a teaser here.</description>
+      <content:encoded><![CDATA[<p>The <strong>full</strong> job description, with &lt;angle brackets&gt; &#8211; and an em&nbsp;space.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Feed with repeated entries</title>
+    <link>https://example.com/</link>
+    <description>Five entries, three distinct posts</description>
+    <item>
+      <title>Original post</title>
+      <guid>dup-1</guid>
+      <description>First time this guid appears.</description>
+    </item>
+    <item>
+      <title>Original post (edited copy)</title>
+      <guid>dup-1</guid>
+      <description>Same guid again, different text: the first one wins.</description>
+    </item>
+    <item>
+      <title>Linked post</title>
+      <link>https://example.com/jobs/same-link</link>
+      <description>No guid; identified by its link.</description>
+    </item>
+    <item>
+      <title>Linked post, reposted</title>
+      <link>https://example.com/jobs/same-link</link>
+      <description>Same link again.</description>
+    </item>
+    <item>
+      <title>A different post</title>
+      <guid>unique-1</guid>
+      <description>Only one of these.</description>
+    </item>
+  </channel>
+</rss>
