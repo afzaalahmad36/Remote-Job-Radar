@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
-from app.routers import health
+from app.core.rate_limit import RateLimiter
+from app.routers import auth, health, users
 
 API_V1_PREFIX = "/api/v1"
 
@@ -31,5 +32,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     register_exception_handlers(app)
+    # One limiter per app instance, kept on app.state so each test app starts with a clean slate.
+    app.state.auth_rate_limiter = RateLimiter(
+        settings.auth_rate_limit_attempts, settings.auth_rate_limit_window_seconds
+    )
     app.include_router(health.router, prefix=API_V1_PREFIX)
+    app.include_router(auth.router, prefix=API_V1_PREFIX)
+    app.include_router(users.router, prefix=API_V1_PREFIX)
     return app

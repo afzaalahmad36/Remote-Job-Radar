@@ -111,7 +111,8 @@ job-radar/
 
 | Table | Key fields |
 |---|---|
-| `users` | id, email, hashed_password, created_at |
+| `users` | id, email (stored lowercase, unique), hashed_password (argon2id), created_at |
+| `refresh_tokens` | id, user_id, family_id, token_hash (SHA-256, unique), expires_at, revoked_at, created_at. One `family_id` per login; each refresh revokes the used token and issues a new one in the same family; replaying a used token revokes the whole family |
 | `cvs` | id, user_id, raw_text, parsed_json, embedding (vector), updated_at |
 | `sources` | id, type (`telegram`/`rss`), name, config (JSONB), is_active, last_synced_at |
 | `jobs` | id, source_id, external_id, raw_text, title, company, stack (array), seniority, salary_min/max/currency, remote_policy, apply_email, apply_url, posted_at, embedding (vector), extraction_status, created_at. **Unique:** (source_id, external_id) |
@@ -185,7 +186,7 @@ docker compose up --build
 
 # or run the API on the host: needs your own Postgres/Redis, set in .env (DATABASE_URL, REDIS_URL)
 uv run alembic upgrade head
-uv run uvicorn app.main:create_app --factory --reload
+uv run uvicorn app.main:create_app --factory --no-proxy-headers --reload
 uv run celery -A app.tasks.celery_app worker -l info
 uv run celery -A app.tasks.celery_app beat -l info
 
@@ -208,8 +209,13 @@ DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/jobradar
 # Tests use this and never DATABASE_URL; the database must be named jobradar_test or the run aborts.
 TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/jobradar_test
 REDIS_URL=redis://localhost:6379/0
+# In production the app refuses to start if SECRET_KEY is "change-me" or shorter than 32 chars.
 SECRET_KEY=change-me
 ACCESS_TOKEN_EXPIRE_MINUTES=30
+REFRESH_TOKEN_EXPIRE_DAYS=7
+# Per client IP and auth endpoint (in-process limiter, single instance only).
+AUTH_RATE_LIMIT_ATTEMPTS=10
+AUTH_RATE_LIMIT_WINDOW_SECONDS=60
 ANTHROPIC_API_KEY=
 LLM_MODEL_EXTRACTION=
 LLM_MODEL_SCORING=
@@ -260,7 +266,7 @@ Never commit `.env` or Telegram session files. Keep them in `.gitignore`.
 | 6 | Next.js dashboard: filters, score badges, kanban board, CV page | Usable UI against the live API |
 | 7 | Hardening: rate limits, caching, observability, README with architecture diagram + demo GIF, deploy | Public live demo |
 
-**Current phase:** 1
+**Current phase:** 2
 
 ---
 

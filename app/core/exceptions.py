@@ -16,25 +16,60 @@ class DomainError(Exception):
     status_code: int = 400
     code: str = "domain_error"
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, headers: dict[str, str] | None = None) -> None:
         super().__init__(detail)
         self.detail = detail
+        self.headers = headers
 
 
-def error_response(status_code: int, detail: Any, code: str) -> JSONResponse:
+class AuthenticationError(DomainError):
+    """The caller is not who they claim to be (bad credentials, missing or invalid token)."""
+
+    status_code = 401
+    code = "authentication_failed"
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail, headers={"WWW-Authenticate": "Bearer"})
+
+
+class ConflictError(DomainError):
+    """The request clashes with existing data (e.g. an email that is already registered)."""
+
+    status_code = 409
+    code = "conflict"
+
+
+class RateLimitError(DomainError):
+    status_code = 429
+    code = "rate_limited"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+            "Too many requests. Try again later.",
+            headers={"Retry-After": str(retry_after_seconds)},
+        )
+
+
+def error_response(
+    status_code: int, detail: Any, code: str, headers: dict[str, str] | None = None
+) -> JSONResponse:
     """Build the one error shape the whole API uses: {"detail": ..., "code": ...}."""
-    return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
+    return JSONResponse(
+        status_code=status_code, content={"detail": detail, "code": code}, headers=headers
+    )
 
 
 async def handle_domain_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, DomainError)  # narrows the type; Starlette passes a plain Exception
-    return error_response(exc.status_code, exc.detail, exc.code)
+    return error_response(exc.status_code, exc.detail, exc.code, exc.headers)
 
 
 async def handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
     # Covers unknown routes (404), wrong methods (405) and any HTTPException raised in routers.
     assert isinstance(exc, StarletteHTTPException)
-    return error_response(exc.status_code, exc.detail, f"http_{exc.status_code}")
+    return error_response(
+        exc.status_code, exc.detail, f"http_{exc.status_code}", dict(exc.headers or {})
+    )
 
 
 async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
