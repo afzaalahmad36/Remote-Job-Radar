@@ -46,4 +46,7 @@ EXPOSE 8000
 
 # Apply migrations, then start the API. `exec` makes uvicorn PID 1 so it receives
 # `docker stop` signals and shuts down cleanly.
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"]
+# --no-proxy-headers: ignore X-Forwarded-For, so clients cannot choose their own IP (the rate
+# limiter keys on it). Behind a real reverse proxy, enable --proxy-headers together with
+# --forwarded-allow-ips=<the proxy's address> explicitly.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:create_app --factory --no-proxy-headers --host 0.0.0.0 --port 8000"]

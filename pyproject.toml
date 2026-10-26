@@ -6,9 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.1",
+    "argon2-cffi>=25.1.0",
     "asyncpg>=0.32.0",
     "fastapi>=0.162.0",
     "pydantic-settings>=2.16.1",
+    "pydantic[email]>=2.14.1",
+    "pyjwt>=2.15.1",
     "sqlalchemy[asyncio]>=2.0,<2.1",
     "uvicorn>=0.54.0",
 ]
@@ -36,6 +39,11 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 # Put the repo root on sys.path so tests can `import app` (the project isn't installed as a package).
 pythonpath = ["."]
+
+[tool.coverage.run]
+# SQLAlchemy's async layer runs on greenlets; without this, coverage loses track of the lines
+# that execute after an awaited query and reports them as untested.
+concurrency = ["greenlet", "thread"]
 
 [dependency-groups]
 dev = [

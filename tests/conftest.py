@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings, get_settings
+from app.db.session import get_session
 from app.main import create_app
 from tests.db_utils import UnsafeDatabaseError, alembic_config, get_test_database_url
 
@@ -30,7 +31,7 @@ def settings(test_database_url: str) -> Settings:
         env="test",
         database_url=test_database_url,
         redis_url="redis://localhost:6379/1",
-        secret_key=SecretStr("test-secret-key"),
+        secret_key=SecretStr("test-secret-key-at-least-32-characters-long"),
         cors_origins="http://localhost:3000",
     )
 
@@ -45,6 +46,18 @@ def app(settings: Settings) -> FastAPI:
 @pytest.fixture
 async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     """An HTTP client that calls the app in-process (no server, no network)."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+
+
+@pytest.fixture
+async def db_client(app: FastAPI, db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """Like `client`, but the API uses the rollback-per-test session, so its data disappears."""
+
+    async def override_get_session() -> AsyncSession:
+        return db_session
+
+    app.dependency_overrides[get_session] = override_get_session
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
 

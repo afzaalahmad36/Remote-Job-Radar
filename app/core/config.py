@@ -1,8 +1,10 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+MIN_PRODUCTION_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -14,7 +16,9 @@ class Settings(BaseSettings):
     required, so no secret or URL is ever hard-coded here.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # hide_input_in_errors: a failed validation must not print the submitted values, which here
+    # include SECRET_KEY and the database URL (with its password) in startup logs.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     env: Literal["development", "test", "production"] = "development"
     database_url: str
@@ -23,6 +27,26 @@ class Settings(BaseSettings):
     secret_key: SecretStr
     # Comma-separated list, e.g. "http://localhost:3000,https://app.example.com".
     cors_origins: str = ""
+
+    access_token_expire_minutes: int = Field(default=30, gt=0)
+    refresh_token_expire_days: int = Field(default=7, gt=0)
+    # Max requests per client IP and auth endpoint within the window (in-process limiter).
+    auth_rate_limit_attempts: int = Field(default=10, gt=0)
+    auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
+
+    @model_validator(mode="after")
+    def _reject_weak_secret_key_in_production(self) -> Self:
+        """A model validator runs after all fields are parsed, so it can compare several."""
+        if self.env == "production":
+            key = self.secret_key.get_secret_value()
+            if key.lower() == "change-me":
+                raise ValueError("SECRET_KEY must not be the placeholder 'change-me' in production")
+            if len(key) < MIN_PRODUCTION_SECRET_LENGTH:
+                raise ValueError(
+                    f"SECRET_KEY must be at least {MIN_PRODUCTION_SECRET_LENGTH} characters "
+                    "in production"
+                )
+        return self
 
     @property
     def cors_origins_list(self) -> list[str]:
