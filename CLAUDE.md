@@ -179,9 +179,11 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 # setup
 uv sync
 cp .env.example .env
-docker compose up -d db redis
 
-# run
+# run everything in containers (API on http://localhost:8000; db/redis are not published)
+docker compose up --build
+
+# or run the API on the host: needs your own Postgres/Redis, set in .env (DATABASE_URL, REDIS_URL)
 uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload
 uv run celery -A app.tasks.celery_app worker -l info
@@ -195,9 +197,6 @@ uv run pytest -q --cov=app
 # migrations
 uv run alembic revision --autogenerate -m "describe change"
 uv run alembic upgrade head
-
-# everything in containers
-docker compose up --build
 ```
 
 ---

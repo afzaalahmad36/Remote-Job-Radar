@@ -1,0 +1,28 @@
+# Secrets and local state: never send these into the build context
+.env
+.env.*
+!.env.example
+.sessions/
+*.session
+*.session-journal
+
+# Version control and CI
+.git
+.github
+
+# Python artifacts and caches
+.venv
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Not needed in the runtime image
+tests/
+frontend/
+node_modules/
+.vscode/
+.idea/

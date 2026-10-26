@@ -62,3 +62,12 @@ jobs:
 
       - name: Tests (pytest)
         run: uv run pytest -q --cov=app
+
+  # Builds the image (no push) so a broken Dockerfile or an out-of-date uv.lock fails the PR.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag remote-job-radar:ci .
