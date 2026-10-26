@@ -16,6 +16,28 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
+
+    # A throwaway Postgres next to the job. The image matches the local/prod one (pgvector, pg16).
+    # Tests refuse to run against any database not named jobradar_test.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: jobradar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d jobradar_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Port 5432 here: the service container is published on the runner's localhost.
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/jobradar_test
+
     steps:
       - uses: actions/checkout@v7
 
