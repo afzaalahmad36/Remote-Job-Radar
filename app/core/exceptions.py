@@ -32,11 +32,28 @@ class AuthenticationError(DomainError):
         super().__init__(detail, headers={"WWW-Authenticate": "Bearer"})
 
 
+class NotFoundError(DomainError):
+    """Also used for rows that exist but belong to someone else: 404, never 403, so the API
+    does not reveal which ids exist."""
+
+    status_code = 404
+    code = "not_found"
+
+
+class InvalidConfigError(DomainError):
+    status_code = 422
+    code = "invalid_config"
+
+
 class ConflictError(DomainError):
     """The request clashes with existing data (e.g. an email that is already registered)."""
 
     status_code = 409
     code = "conflict"
+
+
+class DuplicateSourceError(ConflictError):
+    code = "duplicate_source"
 
 
 class RateLimitError(DomainError):

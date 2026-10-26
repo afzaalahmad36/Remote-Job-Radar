@@ -8,10 +8,12 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.api_deps import get_resolver
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.main import create_app
 from tests.db_utils import UnsafeDatabaseError, alembic_config, get_test_database_url
+from tests.fakes import FakeResolver
 
 
 @pytest.fixture(scope="session")
@@ -37,9 +39,16 @@ def settings(test_database_url: str) -> Settings:
 
 
 @pytest.fixture
-def app(settings: Settings) -> FastAPI:
+def resolver() -> FakeResolver:
+    """DNS for tests: a fixed zone, never the network. Tests can inspect `resolver.calls`."""
+    return FakeResolver()
+
+
+@pytest.fixture
+def app(settings: Settings, resolver: FakeResolver) -> FastAPI:
     app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_resolver] = lambda: resolver
     return app
 
 

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,8 +8,10 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthenticationError
 from app.core.rate_limit import RateLimiter
 from app.core.security import decode_access_token
+from app.core.url_safety import Resolver, system_resolver
 from app.db.session import get_session
 from app.models import User
+from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, PageParams
 from app.services import auth_service
 
 # `Depends` is FastAPI's dependency injection: FastAPI calls get_settings() for each request
@@ -39,6 +41,25 @@ async def get_current_user(
 
 
 CurrentUserDep = Annotated[User, Depends(get_current_user)]
+
+
+def get_resolver() -> Resolver:
+    """The DNS resolver used to check user-supplied URLs; tests override it so DNS is never hit."""
+    return system_resolver
+
+
+ResolverDep = Annotated[Resolver, Depends(get_resolver)]
+
+
+def get_page_params(
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+    offset: Annotated[int, Query(ge=0, le=MAX_PAGE_OFFSET)] = 0,
+) -> PageParams:
+    """Reads and bounds `?limit=&offset=`; out-of-range values get a 422."""
+    return PageParams(limit=limit, offset=offset)
+
+
+PageDep = Annotated[PageParams, Depends(get_page_params)]
 
 
 async def rate_limit_auth(request: Request) -> None:
