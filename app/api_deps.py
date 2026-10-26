@@ -10,9 +10,11 @@ from app.core.rate_limit import RateLimiter
 from app.core.security import decode_access_token
 from app.core.url_safety import Resolver, system_resolver
 from app.db.session import get_session
-from app.models import User
+from app.ingestion.base import SourceFetcher
+from app.models import SourceType, User
 from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, PageParams
 from app.services import auth_service
+from app.services.ingestion_service import default_fetchers
 
 # `Depends` is FastAPI's dependency injection: FastAPI calls get_settings() for each request
 # and passes the result in. Tests can swap it via `app.dependency_overrides`.
@@ -60,6 +62,20 @@ def get_page_params(
 
 
 PageDep = Annotated[PageParams, Depends(get_page_params)]
+
+
+def get_fetchers() -> dict[SourceType, SourceFetcher]:
+    """The fetchers used to sync sources; tests override this so no request leaves the machine."""
+    return default_fetchers()
+
+
+FetchersDep = Annotated[dict[SourceType, SourceFetcher], Depends(get_fetchers)]
+
+
+async def rate_limit_sync(request: Request, user: CurrentUserDep) -> None:
+    """Limit manual syncs per user: each one makes outbound HTTP requests on the server."""
+    limiter: RateLimiter = request.app.state.sync_rate_limiter
+    limiter.check(f"sync:{user.id}")
 
 
 async def rate_limit_auth(request: Request) -> None:

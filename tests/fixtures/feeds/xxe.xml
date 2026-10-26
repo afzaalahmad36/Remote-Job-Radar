@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!DOCTYPE rss [
+  <!ENTITY secret SYSTEM "file:///etc/hostname">
+  <!ENTITY secret2 SYSTEM "file:///C:/Windows/win.ini">
+  <!ENTITY remote SYSTEM "http://169.254.169.254/latest/meta-data/">
+]>
+<rss version="2.0">
+  <channel>
+    <title>External entity attempt</title>
+    <link>https://example.com/</link>
+    <description>Tries to read local files and internal URLs</description>
+    <item>
+      <title>XXE entry</title>
+      <guid>xxe-1</guid>
+      <description>file: &secret; and &secret2; and &remote;</description>
+    </item>
+  </channel>
+</rss>

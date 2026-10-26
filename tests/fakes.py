@@ -1,5 +1,62 @@
 """Test doubles that keep tests off the network."""
 
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+import httpx
+
+FEEDS_DIR = Path(__file__).parent / "fixtures" / "feeds"
+
+
+def feed_bytes(name: str) -> bytes:
+    """A recorded feed from tests/fixtures/feeds."""
+    return (FEEDS_DIR / name).read_bytes()
+
+
+Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+
+
+class FakeFeedServer:
+    """An in-memory web server for httpx: URLs map to responses, and every request is recorded.
+
+    Use `.transport` as the transport of an httpx client; no socket is ever opened.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+        self._routes: dict[str, Handler] = {}
+        self.transport = httpx.MockTransport(self._handle)
+
+    def add(
+        self,
+        url: str,
+        content: bytes | str = b"",
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.add_handler(
+            url, lambda request: httpx.Response(status, content=content, headers=headers)
+        )
+
+    def redirect(self, url: str, to: str, status: int = 302) -> None:
+        self.add(url, status=status, headers={"Location": to})
+
+    def add_handler(self, url: str, handler: Handler) -> None:
+        self._routes[str(httpx.URL(url))] = handler  # httpx normalizes ("https://a.com" -> ".../")
+
+    async def _handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        handler = self._routes.get(str(request.url))
+        if handler is None:
+            return httpx.Response(404)
+        response = handler(request)
+        return await response if isinstance(response, Awaitable) else response
+
+    @property
+    def urls(self) -> list[str]:
+        return [str(request.url) for request in self.requests]
+
+
 # Pretend DNS zone. The addresses mirror what the real names would resolve to.
 DEFAULT_DNS_RECORDS: dict[str, list[str]] = {
     "example.com": ["93.184.216.34"],

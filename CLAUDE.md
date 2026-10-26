@@ -115,8 +115,8 @@ job-radar/
 | `users` | id, email (stored lowercase, unique), hashed_password (argon2id), created_at |
 | `refresh_tokens` | id, user_id, family_id, token_hash (SHA-256, unique), expires_at, revoked_at, created_at. One `family_id` per login; each refresh revokes the used token and issues a new one in the same family; replaying a used token revokes the whole family |
 | `cvs` | id, user_id, raw_text, parsed_json, embedding (vector), updated_at |
-| `sources` | id, user_id (FK users, ON DELETE CASCADE, indexed), type (`telegram`/`rss`), name, config (JSONB; RSS requires `url`, unknown keys rejected), is_active, last_synced_at. A user only ever sees their own sources (others' are 404, never 403). A user cannot have two RSS sources with the same normalized URL (lowercase host, no default port, trailing slash or fragment): 409 `duplicate_source`, checked in the service, not by a DB constraint. Prefer `is_active=false` over deleting: deleting a source cascades to its jobs |
-| `jobs` | id, source_id, external_id, raw_text, title, company, stack (array), seniority, salary_min/max/currency, remote_policy, apply_email, apply_url, posted_at, embedding (vector), extraction_status, created_at. **Unique:** (source_id, external_id) |
+| `sources` | id, user_id (FK users, ON DELETE CASCADE, indexed), type (`telegram`/`rss`), name, config (JSONB; RSS requires `url`, unknown keys rejected), is_active, last_synced_at (last successful sync), etag + last_modified (conditional-GET validators), last_error (short, sanitized reason the last sync failed; NULL after a success). A user only ever sees their own sources (others' are 404, never 403). A user cannot have two RSS sources with the same normalized URL (lowercase host, no default port, trailing slash or fragment): 409 `duplicate_source`, checked in the service, not by a DB constraint. Prefer `is_active=false` over deleting: deleting a source cascades to its jobs |
+| `jobs` | id, source_id (a job belongs to a user through its source; `GET /jobs` joins `sources.user_id`), external_id (the post's GUID, else its link, else `sha256:` of title+link+date), raw_text (plain text, never HTML), title, company, stack (array), seniority, salary_min/max/currency, remote_policy, apply_email, apply_url, posted_at, embedding (vector), extraction_status, created_at. **Unique:** (source_id, external_id) |
 | `job_matches` | id, user_id, job_id, score (0-100), reasons (JSONB), missing_skills (array), created_at. **Unique:** (user_id, job_id) |
 | `applications` | id, user_id, job_id, status (enum), email_draft, sent_at, notes, updated_at |
 | `application_events` | id, application_id, from_status, to_status, created_at (audit trail) |
@@ -128,7 +128,7 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 ## 6. Core pipelines
 
 **Ingestion → Extraction → Matching**
-1. `ingest_source` task fetches new posts → stores raw rows in `jobs` (`extraction_status=pending`), deduplicated.
+1. `ingest_source` (`services/ingestion_service.py`) fetches a source through its `SourceFetcher` (`ingestion/`: RSS now, Telegram later) → stores only `raw_text`, `posted_at` (UTC), `external_id` and `extraction_status=pending` in `jobs`; the structured fields stay NULL until step 2. Idempotent: `INSERT … ON CONFLICT (source_id, external_id) DO NOTHING` (rows inserted in a fixed order), so re-runs and overlapping syncs insert nothing twice. Network I/O never runs inside an open DB transaction: fetch first, then write. `raw_text` is capped at 20,000 characters per post. Changing a source's config URL clears its etag, last_modified and last_error. A failing source never raises: a short sanitized message goes to `sources.last_error` (no IPs, internal hostnames or stack traces) and the other sources are unaffected. RSS fetching: we fetch with httpx and feedparser only parses the bytes (always via a file-like object, never a str/bytes path or URL); `url_safety` runs before the first request and before every redirect hop (redirects are followed manually, max 3); timeouts 5 s connect / 10 s read / 20 s overall; body capped at 2 MB (decoded) and 200 entries; conditional GET via ETag / Last-Modified. Until Celery is wired in, it runs inline from `POST /sources/{id}/sync` (rate-limited per user).
 2. `extract_job` task sends `raw_text` to the LLM with the extraction prompt → validated `JobExtraction` schema → updates the job.
 3. `embed_job` computes the embedding.
 4. `score_job_for_user` combines: cosine similarity (pgvector) for candidate retrieval, then the LLM for a 0-100 score with reasons and missing skills. Store in `job_matches`.
@@ -217,6 +217,9 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 # Per client IP and auth endpoint (in-process limiter, single instance only).
 AUTH_RATE_LIMIT_ATTEMPTS=10
 AUTH_RATE_LIMIT_WINDOW_SECONDS=60
+# Manual source syncs per user (each makes outbound HTTP requests).
+SYNC_RATE_LIMIT_ATTEMPTS=10
+SYNC_RATE_LIMIT_WINDOW_SECONDS=60
 ANTHROPIC_API_KEY=
 LLM_MODEL_EXTRACTION=
 LLM_MODEL_SCORING=

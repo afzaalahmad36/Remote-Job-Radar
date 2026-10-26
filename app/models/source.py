@@ -27,3 +27,8 @@ class Source(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     config: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default="{}")
     is_active: Mapped[bool] = mapped_column(server_default=true())
     last_synced_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Conditional GET validators the feed server sent last time (see ingestion/rss.py).
+    etag: Mapped[str | None] = mapped_column(String(255), default=None)
+    last_modified: Mapped[str | None] = mapped_column(String(100), default=None)
+    # Short, sanitized reason the last sync failed; NULL after a successful one.
+    last_error: Mapped[str | None] = mapped_column(String(500), default=None)

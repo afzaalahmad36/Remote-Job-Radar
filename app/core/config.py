@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Max requests per client IP and auth endpoint within the window (in-process limiter).
     auth_rate_limit_attempts: int = Field(default=10, gt=0)
     auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
+    # Max manual source syncs per user within the window (each one makes outbound requests).
+    sync_rate_limit_attempts: int = Field(default=10, gt=0)
+    sync_rate_limit_window_seconds: int = Field(default=60, gt=0)
 
     @model_validator(mode="after")
     def _reject_weak_secret_key_in_production(self) -> Self:

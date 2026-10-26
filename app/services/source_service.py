@@ -80,6 +80,10 @@ async def update_source(
     if data.is_active is not None:
         source.is_active = data.is_active
     if config is not None:
+        if config != source.config:
+            # A different URL is a different feed: its old ETag / Last-Modified would be sent to
+            # the wrong server, and the old error no longer describes anything.
+            source.etag = source.last_modified = source.last_error = None
         source.config = config
     await session.commit()
     await session.refresh(source)
