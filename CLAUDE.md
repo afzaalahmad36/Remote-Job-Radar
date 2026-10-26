@@ -206,6 +206,8 @@ docker compose up --build
 
 ```
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/jobradar
+# Tests use this and never DATABASE_URL; the database must be named jobradar_test or the run aborts.
+TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/jobradar_test
 REDIS_URL=redis://localhost:6379/0
 SECRET_KEY=change-me
 ACCESS_TOKEN_EXPIRE_MINUTES=30
