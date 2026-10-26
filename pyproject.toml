@@ -1,0 +1,49 @@
+[project]
+name = "remote-job-radar"
+version = "0.1.0"
+description = "AI-powered remote job pipeline: ingest, extract, score and track applications."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.162.0",
+    "pydantic-settings>=2.16.1",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "uvicorn>=0.54.0",
+]
+
+[tool.uv]
+# An application, not a library: uv installs the dependencies but not `app` itself.
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes, I: import sorting, UP: modern syntax,
+# B: bugbear (likely bugs), ASYNC: blocking calls inside async code.
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+strict = true
+files = ["app"]
+
+[tool.pytest.ini_options]
+# "auto" lets async tests run without decorating each one with @pytest.mark.asyncio.
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Put the repo root on sys.path so tests can `import app` (the project isn't installed as a package).
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.2",
+]
