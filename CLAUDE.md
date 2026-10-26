@@ -183,7 +183,7 @@ docker compose up -d db redis
 
 # run
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:create_app --factory --reload
 uv run celery -A app.tasks.celery_app worker -l info
 uv run celery -A app.tasks.celery_app beat -l info
 
