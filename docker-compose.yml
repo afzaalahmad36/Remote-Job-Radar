@@ -1,0 +1,58 @@
+# Fixed project name: Compose prefixes every network/volume with it, which keeps this stack's
+# resources separate from other projects. No container_name is set, for the same reason.
+name: remote-job-radar
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # local development only
+      POSTGRES_DB: jobradar
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d jobradar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No `ports:` on purpose: only the api container talks to the database, over the Compose
+    # network. This avoids clashing with Postgres instances already using 5432/5433 on the host.
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No `ports:`, for the same reason (6379 is commonly taken on the host).
+
+  api:
+    build: .
+    env_file: .env # SECRET_KEY, CORS_ORIGINS, API keys, ... (copy .env.example to .env first)
+    environment:
+      # `environment` wins over `env_file`: inside the network the hosts are the service names.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/jobradar
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8000:8000" # reachable from this machine only, not from the network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # The slim image has no curl; urlopen raises on a non-2xx response, so python exits 1.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  pgdata:
