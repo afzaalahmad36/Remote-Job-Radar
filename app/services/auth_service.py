@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,6 +108,44 @@ async def logout(session: AsyncSession, raw_token: str, now: datetime | None = N
     if stored is not None:
         await _revoke_family(session, stored.family_id, now)
         await session.commit()
+
+
+REFRESH_TOKEN_PURGE_GRACE = timedelta(days=7)
+PURGE_BATCH_SIZE = 5_000
+
+
+async def purge_expired_refresh_tokens(
+    session: AsyncSession,
+    now: datetime | None = None,
+    grace: timedelta = REFRESH_TOKEN_PURGE_GRACE,
+    batch_size: int = PURGE_BATCH_SIZE,
+) -> int:
+    """Delete refresh tokens that expired more than `grace` ago; return how many were deleted.
+
+    The rule is about `expires_at` only, never about `revoked_at`:
+
+      * A token is deleted only once it is expired AND `grace` (7 days) has passed since.
+      * A revoked token whose original expiry has not passed is NEVER deleted. Every rotation
+        revokes the old token, and keeping it is what lets reuse detection work: replaying it
+        must still be found so the whole token family can be revoked. If it were purged, a
+        replay would just look like an unknown token.
+      * Once a token is past its expiry nobody can use it (it would be rejected as expired), so
+        what is lost by deleting it is only the "this was a replay" signal for a dead token.
+        The grace period keeps even that for a week, which also covers clock differences and
+        gives time to investigate recently expired sessions.
+
+    Deletes run in batches, committing after each, so a large backlog never holds a long lock.
+    """
+    cutoff = (now or datetime.now(UTC)) - grace
+    deleted = 0
+    while True:
+        batch = select(RefreshToken.id).where(RefreshToken.expires_at < cutoff).limit(batch_size)
+        result = await session.execute(delete(RefreshToken).where(RefreshToken.id.in_(batch)))
+        await session.commit()
+        removed = int(result.rowcount)  # type: ignore[attr-defined]
+        deleted += removed
+        if removed < batch_size:
+            return deleted
 
 
 async def get_user(session: AsyncSession, user_id: uuid.UUID) -> User | None:

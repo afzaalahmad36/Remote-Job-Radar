@@ -4,16 +4,16 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api_deps import (
     CurrentUserDep,
-    FetchersDep,
     PageDep,
+    QueueDep,
     ResolverDep,
     SessionDep,
     rate_limit_sync,
 )
-from app.schemas.ingestion import SyncOut
+from app.schemas.ingestion import SyncAcceptedOut
 from app.schemas.pagination import Page
 from app.schemas.source import SourceCreate, SourceRead, SourceUpdate
-from app.services import ingestion_service, source_service
+from app.services import source_service, sync_service
 
 # Every endpoint takes CurrentUserDep, so all of them answer 401 without a valid access token.
 router = APIRouter(prefix="/sources", tags=["sources"])
@@ -59,23 +59,23 @@ async def update_source(
     return SourceRead.model_validate(source)
 
 
-@router.post("/{source_id}/sync", dependencies=[Depends(rate_limit_sync)])
+@router.post(
+    "/{source_id}/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(rate_limit_sync)],
+)
 async def sync_source(
-    source_id: uuid.UUID, user: CurrentUserDep, session: SessionDep, fetchers: FetchersDep
-) -> SyncOut:
-    """Fetch the source now and store its new posts as jobs.
+    source_id: uuid.UUID, user: CurrentUserDep, session: SessionDep, queue: QueueDep
+) -> SyncAcceptedOut:
+    """Ask for the source to be synced now. Returns 202: the sync runs in the background.
 
-    Runs inside the request (up to ~20 s for a slow feed); a background schedule comes later.
-    A failing feed is reported in `error`, not as an HTTP error: the request itself worked.
+    `status` is `queued`, or `already_running` if a sync of this source is in progress (not an
+    error: it is already fetching what you wanted). The result appears on the source
+    (`last_synced_at`, `last_error`) and in `GET /jobs`.
     """
     source = await source_service.get_source(session, user.id, source_id)  # 404 if not yours
-    summary = await ingestion_service.ingest_source(session, source, fetchers)
-    return SyncOut(
-        fetched=summary.fetched,
-        inserted=summary.inserted,
-        skipped=summary.skipped,
-        error=summary.error,
-    )
+    request_status = await sync_service.request_sync(queue, source.id)
+    return SyncAcceptedOut(source_id=source.id, status=request_status)
 
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)

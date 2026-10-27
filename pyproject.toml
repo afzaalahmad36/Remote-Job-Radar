@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.20.1",
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.32.0",
+    "celery[redis]>=5.6.3",
     "fastapi>=0.162.0",
     "feedparser>=6.0.14",
     "httpx>=0.28.1",
@@ -36,9 +37,15 @@ strict = true
 files = ["app"]
 
 [[tool.mypy.overrides]]
-# feedparser ships no type hints; everything it returns is treated as Any and narrowed by us.
-module = ["feedparser"]
+# These libraries ship no type hints; what they return is treated as Any and narrowed by us.
+module = ["feedparser", "celery", "celery.*", "kombu", "kombu.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Celery's @task decorator is untyped, so the decorated functions look untyped to mypy. Only the
+# decorator is affected: the functions' own bodies and signatures are still checked strictly.
+module = ["app.tasks.jobs"]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 # "auto" lets async tests run without decorating each one with @pytest.mark.asyncio.

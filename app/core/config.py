@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # Max requests per client IP and auth endpoint within the window (in-process limiter).
     auth_rate_limit_attempts: int = Field(default=10, gt=0)
     auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
+    # How often Celery beat syncs every active source. At least 5 minutes: shorter than that
+    # hammers the feeds' servers (and risks getting us blocked) for no real benefit.
+    ingest_interval_minutes: int = Field(default=30, ge=5)
+    # How many tasks one Celery worker runs at once (its prefork processes). docker-compose passes
+    # this to `--concurrency`; a worker started by hand picks it up from the Celery config.
+    celery_worker_concurrency: int = Field(default=2, ge=1, le=16)
     # Max manual source syncs per user within the window (each one makes outbound requests).
     sync_rate_limit_attempts: int = Field(default=10, gt=0)
     sync_rate_limit_window_seconds: int = Field(default=60, gt=0)
