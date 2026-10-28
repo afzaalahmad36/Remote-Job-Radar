@@ -1,8 +1,11 @@
+import os
 import socket
 
 import pytest
 import redis
+from sqlalchemy.engine import make_url
 
+from tests.db_utils import DEFAULT_TEST_DATABASE_URL
 from tests.network_guard import (
     MAX_ATTEMPTS_PER_TEST_ON_UNREACHABLE_PORT,
     UNREACHABLE_PORT,
@@ -10,10 +13,33 @@ from tests.network_guard import (
 )
 
 
-@pytest.mark.parametrize("port", [6379, 6380, 5432, 27017, 8000])
+def database_port() -> int:
+    """The port of the test database, read the same way the guard reads it. It differs between
+    machines (5433 locally, 5432 on CI), so nothing here may hardcode it."""
+    url = make_url(os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL))
+    return url.port or 5432
+
+
+@pytest.mark.parametrize("port", [6379, 6380, 27017, 8000, 3306])
 def test_connecting_to_well_known_service_ports_on_loopback_is_blocked(port: int) -> None:
     with pytest.raises(NetworkAccessBlockedError, match=str(port)):
         socket.create_connection(("127.0.0.1", port), timeout=1)
+
+
+def test_a_postgres_port_that_is_not_the_test_database_is_blocked() -> None:
+    other = 5432 if database_port() != 5432 else 5433  # another project's database
+
+    with pytest.raises(NetworkAccessBlockedError, match=str(other)):
+        socket.create_connection(("127.0.0.1", other), timeout=1)
+
+
+def test_the_database_port_itself_is_allowed() -> None:
+    try:
+        socket.create_connection(("127.0.0.1", database_port()), timeout=2).close()
+    except NetworkAccessBlockedError:  # pragma: no cover - the failure this test exists for
+        raise
+    except OSError:
+        pass  # nothing is listening on this machine right now: still not the guard's doing
 
 
 @pytest.mark.parametrize("host", ["93.184.216.34", "10.0.0.5", "169.254.169.254"])
