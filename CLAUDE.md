@@ -172,6 +172,7 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 - Use factories (factory-boy) for test data. No shared mutable state between tests.
 - Write tests **alongside each feature**, not after. A feature is not done without tests.
 - Mock: Anthropic API, Telegram, outbound HTTP. Never hit the network in tests.
+- **Tests never use a real Redis or broker** (nor any real network service except the test DB). Use `FakeTaskQueue` / `FakeSourceLocks` (`tests/fakes.py`) through dependency overrides or arguments, and point any Redis setting at `UNREACHABLE_REDIS_URL` (a port where nothing listens). `tests/network_guard.py` enforces this for every test: any other connection raises `NetworkAccessBlockedError`. CI has no Redis service on purpose, and every CI job has a `timeout-minutes`.
 
 ---
 

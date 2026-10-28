@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from alembic import command
@@ -15,9 +15,18 @@ from app.ingestion.base import SourceFetcher
 from app.ingestion.rss import RssFetcher
 from app.main import create_app
 from app.models import SourceType
+from tests import network_guard
 from tests.db_utils import UnsafeDatabaseError, alembic_config, get_test_database_url
-from tests.fakes import FakeFeedServer, FakeResolver, FakeTaskQueue
+from tests.fakes import UNREACHABLE_REDIS_URL, FakeFeedServer, FakeResolver, FakeTaskQueue
 from tests.task_helpers import celery_env, seed  # noqa: F401  (fixtures, registered for all tests)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_real_network() -> Iterator[None]:
+    """Every test runs with outbound connections blocked (except the test DB): see the module."""
+    uninstall = network_guard.install()
+    yield
+    uninstall()
 
 
 @pytest.fixture(scope="session")
@@ -36,7 +45,7 @@ def settings(test_database_url: str) -> Settings:
         _env_file=None,
         env="test",
         database_url=test_database_url,
-        redis_url="redis://localhost:6379/1",
+        redis_url=UNREACHABLE_REDIS_URL,
         secret_key=SecretStr("test-secret-key-at-least-32-characters-long"),
         cors_origins="http://localhost:3000",
     )

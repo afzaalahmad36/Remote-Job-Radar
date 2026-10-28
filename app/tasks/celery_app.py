@@ -14,6 +14,15 @@ HARD_TIME_LIMIT_SECONDS = 90
 
 PURGE_AT_UTC = {"hour": 3, "minute": 17}  # daily, at a quiet time
 
+# How long we wait on Redis before giving up, for the broker and for the lock client alike. Short,
+# so a Redis outage shows up as a quick 503 from the API instead of requests hanging; the worker
+# and beat simply retry in their own loops.
+REDIS_CONNECT_TIMEOUT_SECONDS = 2.0
+REDIS_SOCKET_TIMEOUT_SECONDS = 5.0
+# The API's overall deadline for one queue operation (a lock check or a publish). Socket
+# timeouts do not cover everything (a slow DNS lookup, for one), so this bounds the whole call.
+QUEUE_CALL_TIMEOUT_SECONDS = 3.0
+
 
 def build_config(settings: Settings) -> dict[str, Any]:
     """Celery's settings, built from the app settings (one place, easy to test)."""
@@ -42,14 +51,19 @@ def build_config(settings: Settings) -> dict[str, Any]:
         "timezone": "UTC",
         "enable_utc": True,
         "broker_connection_retry_on_startup": True,
-        # Publishing from the API must fail fast when Redis is down (the API then answers 503).
+        # Publishing from the API must fail fast when Redis is down (the API then answers 503):
+        # three quick attempts in total, each bounded by the connection timeout below.
         "task_publish_retry_policy": {
             "max_retries": 2,
             "interval_start": 0,
             "interval_step": 0.2,
             "interval_max": 0.5,
         },
-        "broker_transport_options": {"socket_connect_timeout": 5, "socket_timeout": 5},
+        "broker_connection_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+        "broker_transport_options": {
+            "socket_connect_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+            "socket_timeout": REDIS_SOCKET_TIMEOUT_SECONDS,
+        },
         "beat_schedule": {
             "ingest-all-active-sources": {
                 "task": "ingest_all_active_sources",

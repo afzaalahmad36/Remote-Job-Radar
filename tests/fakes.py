@@ -6,7 +6,13 @@ from pathlib import Path
 
 import httpx
 
+from tests.network_guard import UNREACHABLE_PORT
+
 FEEDS_DIR = Path(__file__).parent / "fixtures" / "feeds"
+
+# Where tests point the app's Redis/broker setting. Nothing listens here, on purpose: tests must
+# never depend on, or touch, a real Redis (this machine, and CI, may have one on 6379).
+UNREACHABLE_REDIS_URL = f"redis://127.0.0.1:{UNREACHABLE_PORT}/0"
 
 
 def feed_bytes(name: str) -> bytes:

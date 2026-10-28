@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.models import Job, RefreshToken, Source, SourceType, User
+from tests.fakes import UNREACHABLE_REDIS_URL
 
 
 class Seeder:
@@ -140,7 +141,7 @@ def celery_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Celery task objects read the app settings the first time they are used, so tests that
     touch them provide a throwaway environment (no broker is ever contacted)."""
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost/x")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/9")
+    monkeypatch.setenv("REDIS_URL", UNREACHABLE_REDIS_URL)
     monkeypatch.setenv("SECRET_KEY", "celery-test-secret-key-at-least-32-chars")
     get_settings.cache_clear()
     yield

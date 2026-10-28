@@ -53,6 +53,13 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 # Put the repo root on sys.path so tests can `import app` (the project isn't installed as a package).
 pythonpath = ["."]
+# No single test may take longer than this (pytest-timeout). A stuck test then fails with a stack
+# trace instead of hanging the run (a Celery test once hung CI for hours). Applies to sync tests
+# too, including the ones that start their own event loop with asyncio.run.
+timeout = 60
+# Print every thread's stack if a test is still running after this long: a warning shot at 50 s,
+# before the 60 s limit above fails it.
+faulthandler_timeout = 50
 
 [tool.coverage.run]
 # SQLAlchemy's async layer runs on greenlets; without this, coverage loses track of the lines
@@ -66,5 +73,6 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.1",
     "pytest-cov>=7.1.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.17.2",
 ]

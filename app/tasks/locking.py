@@ -7,7 +7,11 @@ from redis import Redis
 from redis.exceptions import LockError
 from redis.lock import Lock
 
-from app.tasks.celery_app import HARD_TIME_LIMIT_SECONDS
+from app.tasks.celery_app import (
+    HARD_TIME_LIMIT_SECONDS,
+    REDIS_CONNECT_TIMEOUT_SECONDS,
+    REDIS_SOCKET_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +60,16 @@ class RedisSourceLocks:
         self._held: dict[uuid.UUID, Lock] = {}  # the locks this object acquired
 
     @classmethod
-    def from_url(cls, url: str) -> "RedisSourceLocks":
-        # Timeouts, so a hung Redis cannot hold a worker or an API request forever.
-        return cls(Redis.from_url(url, socket_connect_timeout=5, socket_timeout=5))
+    def from_url(
+        cls,
+        url: str,
+        connect_timeout: float = REDIS_CONNECT_TIMEOUT_SECONDS,
+        timeout: float = REDIS_SOCKET_TIMEOUT_SECONDS,
+    ) -> "RedisSourceLocks":
+        # Timeouts, so a dead or hung Redis cannot hold a worker or an API request forever.
+        return cls(
+            Redis.from_url(url, socket_connect_timeout=connect_timeout, socket_timeout=timeout)
+        )
 
     def acquire(self, source_id: uuid.UUID) -> bool:
         lock = self._client.lock(lock_key(source_id), timeout=LOCK_TTL_SECONDS, blocking=False)

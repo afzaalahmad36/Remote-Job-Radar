@@ -14,6 +14,9 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.tasks.celery_app import (
     HARD_TIME_LIMIT_SECONDS,
+    QUEUE_CALL_TIMEOUT_SECONDS,
+    REDIS_CONNECT_TIMEOUT_SECONDS,
+    REDIS_SOCKET_TIMEOUT_SECONDS,
     SOFT_TIME_LIMIT_SECONDS,
     build_config,
     celery_app,
@@ -138,6 +141,20 @@ def test_publishing_fails_fast_when_the_broker_is_down() -> None:
     assert policy["max_retries"] <= 3 and policy["interval_max"] <= 1
 
 
+def test_the_broker_has_short_connection_and_socket_timeouts() -> None:
+    config = build_config(settings_with())
+
+    assert config["broker_connection_timeout"] == REDIS_CONNECT_TIMEOUT_SECONDS == 2.0
+    assert config["broker_transport_options"] == {
+        "socket_connect_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+        "socket_timeout": REDIS_SOCKET_TIMEOUT_SECONDS,
+    }
+
+
+def test_the_api_deadline_for_one_queue_call_is_a_few_seconds() -> None:
+    assert 0 < QUEUE_CALL_TIMEOUT_SECONDS <= 5
+
+
 # --- the beat schedule ---------------------------------------------------------------------------
 
 
@@ -192,6 +209,12 @@ class RecordingScheduler(Scheduler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.sent: list[str] = []
         super().__init__(*args, **kwargs)
+
+    @property
+    def producer(self) -> None:  # type: ignore[override]
+        # The real property opens a broker connection and retries it up to 100 times with
+        # growing pauses, which hangs forever when no Redis is listening. We never publish.
+        return None
 
     def apply_async(
         self, entry: Any, producer: Any = None, advance: bool = True, **kw: Any

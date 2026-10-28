@@ -1,10 +1,17 @@
 import logging
+import socket
+import time
 import uuid
 
 import pytest
 from redis.exceptions import LockNotOwnedError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from app.tasks.celery_app import HARD_TIME_LIMIT_SECONDS
+from app.tasks.celery_app import (
+    HARD_TIME_LIMIT_SECONDS,
+    REDIS_CONNECT_TIMEOUT_SECONDS,
+    REDIS_SOCKET_TIMEOUT_SECONDS,
+)
 from app.tasks.locking import (
     LOCK_KEY_PREFIX,
     LOCK_TTL_SECONDS,
@@ -12,6 +19,7 @@ from app.tasks.locking import (
     lock_key,
     redis_locks_for,
 )
+from tests.fakes import UNREACHABLE_REDIS_URL
 
 
 class FakeRedisLock:
@@ -132,18 +140,42 @@ def test_a_lock_that_expired_is_not_released_over_its_new_owner(
     assert "expired before it was released" in caplog.text
 
 
-def test_the_real_client_has_socket_timeouts() -> None:
-    # So a hung Redis cannot hold a worker or an API request forever.
-    client = RedisSourceLocks.from_url("redis://localhost:6379/0")._client
+def test_the_real_client_has_short_connect_and_socket_timeouts() -> None:
+    # So a dead or hung Redis cannot hold a worker or an API request for long.
+    client = RedisSourceLocks.from_url(UNREACHABLE_REDIS_URL)._client
 
     kwargs = client.connection_pool.connection_kwargs
-    assert kwargs["socket_connect_timeout"] == 5 and kwargs["socket_timeout"] == 5
+    assert kwargs["socket_connect_timeout"] == REDIS_CONNECT_TIMEOUT_SECONDS == 2.0
+    assert kwargs["socket_timeout"] == REDIS_SOCKET_TIMEOUT_SECONDS == 5.0
+
+
+def test_the_timeouts_can_be_overridden_per_client() -> None:
+    client = RedisSourceLocks.from_url(
+        UNREACHABLE_REDIS_URL, connect_timeout=0.3, timeout=0.4
+    )._client
+
+    kwargs = client.connection_pool.connection_kwargs
+    assert (kwargs["socket_connect_timeout"], kwargs["socket_timeout"]) == (0.3, 0.4)
+
+
+def test_a_redis_that_accepts_but_never_answers_fails_within_the_socket_timeout() -> None:
+    with socket.socket() as silent_server:  # accepts connections (backlog), never replies
+        silent_server.bind(("127.0.0.1", 0))
+        silent_server.listen(5)
+        url = f"redis://127.0.0.1:{silent_server.getsockname()[1]}/0"
+        locks = RedisSourceLocks.from_url(url, connect_timeout=0.3, timeout=0.3)
+        started = time.perf_counter()
+
+        with pytest.raises(RedisTimeoutError):
+            locks.is_locked(SOURCE)
+
+    assert time.perf_counter() - started < 3  # about 0.3 s, not "until Redis answers"
 
 
 def test_one_lock_client_is_shared_per_redis_url() -> None:
-    first = redis_locks_for("redis://localhost:6379/0")
-    second = redis_locks_for("redis://localhost:6379/0")
-    other = redis_locks_for("redis://localhost:6379/1")
+    first = redis_locks_for(UNREACHABLE_REDIS_URL)
+    second = redis_locks_for(UNREACHABLE_REDIS_URL)
+    other = redis_locks_for(UNREACHABLE_REDIS_URL.replace("/0", "/1"))
 
     assert first is second
     assert first is not other
