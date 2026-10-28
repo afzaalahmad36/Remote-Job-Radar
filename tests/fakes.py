@@ -1,11 +1,18 @@
 """Test doubles that keep tests off the network."""
 
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
 
+from tests.network_guard import UNREACHABLE_PORT
+
 FEEDS_DIR = Path(__file__).parent / "fixtures" / "feeds"
+
+# Where tests point the app's Redis/broker setting. Nothing listens here, on purpose: tests must
+# never depend on, or touch, a real Redis (this machine, and CI, may have one on 6379).
+UNREACHABLE_REDIS_URL = f"redis://127.0.0.1:{UNREACHABLE_PORT}/0"
 
 
 def feed_bytes(name: str) -> bytes:
@@ -55,6 +62,49 @@ class FakeFeedServer:
     @property
     def urls(self) -> list[str]:
         return [str(request.url) for request in self.requests]
+
+
+class FakeTaskQueue:
+    """Stands in for the Celery queue in API tests: nothing is published anywhere."""
+
+    def __init__(self) -> None:
+        self.enqueued: list[uuid.UUID] = []
+        self.syncing: set[uuid.UUID] = set()  # sources that "have a sync in progress"
+        self.is_syncing_calls: list[uuid.UUID] = []
+        self.fail_with: Exception | None = None  # set to simulate Redis being down
+
+    async def is_syncing(self, source_id: uuid.UUID) -> bool:
+        self.is_syncing_calls.append(source_id)
+        if self.fail_with:
+            raise self.fail_with
+        return source_id in self.syncing
+
+    async def enqueue_sync(self, source_id: uuid.UUID) -> None:
+        if self.fail_with:
+            raise self.fail_with
+        self.enqueued.append(source_id)
+
+
+class FakeSourceLocks:
+    """In-memory SourceLocks that records every acquire and release."""
+
+    def __init__(self) -> None:
+        self.held: set[uuid.UUID] = set()
+        self.events: list[tuple[str, uuid.UUID]] = []
+
+    def acquire(self, source_id: uuid.UUID) -> bool:
+        self.events.append(("acquire", source_id))
+        if source_id in self.held:
+            return False
+        self.held.add(source_id)
+        return True
+
+    def release(self, source_id: uuid.UUID) -> None:
+        self.events.append(("release", source_id))
+        self.held.discard(source_id)
+
+    def is_locked(self, source_id: uuid.UUID) -> bool:
+        return source_id in self.held
 
 
 # Pretend DNS zone. The addresses mirror what the real names would resolve to.

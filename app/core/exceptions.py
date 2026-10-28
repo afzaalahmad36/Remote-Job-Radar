@@ -56,6 +56,13 @@ class DuplicateSourceError(ConflictError):
     code = "duplicate_source"
 
 
+class QueueUnavailableError(DomainError):
+    """The background-job system (Redis) cannot be reached right now."""
+
+    status_code = 503
+    code = "queue_unavailable"
+
+
 class RateLimitError(DomainError):
     status_code = 429
     code = "rate_limited"

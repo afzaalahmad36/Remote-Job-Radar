@@ -2,6 +2,17 @@
 # resources separate from other projects. No container_name is set, for the same reason.
 name: remote-job-radar
 
+# What api, worker and beat have in common: the same image, config and environment. They differ
+# only in the command they run. (`&app` names this block; `<<: *app` copies it into a service.)
+x-app: &app
+  build: .
+  image: remote-job-radar:dev # one image, tagged once, for all three services
+  env_file: .env # SECRET_KEY, CORS_ORIGINS, API keys, ... (copy .env.example to .env first)
+  environment:
+    # `environment` wins over `env_file`: inside the network the hosts are the service names.
+    DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/jobradar
+    REDIS_URL: redis://redis:6379/0
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -16,7 +27,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    # No `ports:` on purpose: only the api container talks to the database, over the Compose
+    # No `ports:` on purpose: only the app containers talk to the database, over the Compose
     # network. This avoids clashing with Postgres instances already using 5432/5433 on the host.
 
   redis:
@@ -28,13 +39,10 @@ services:
       retries: 10
     # No `ports:`, for the same reason (6379 is commonly taken on the host).
 
+  # The only service that runs migrations (the image's default command: `alembic upgrade head`,
+  # then uvicorn) and the only one that publishes a port.
   api:
-    build: .
-    env_file: .env # SECRET_KEY, CORS_ORIGINS, API keys, ... (copy .env.example to .env first)
-    environment:
-      # `environment` wins over `env_file`: inside the network the hosts are the service names.
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/jobradar
-      REDIS_URL: redis://redis:6379/0
+    <<: *app
     ports:
       - "127.0.0.1:8000:8000" # reachable from this machine only, not from the network
     depends_on:
@@ -53,6 +61,64 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # Runs the background tasks (syncing sources, purging old tokens). It never migrates: it waits
+  # for the api to be healthy, which means the migrations have already been applied.
+  worker:
+    <<: *app
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      # Tasks run at once. Set CELERY_WORKER_CONCURRENCY in .env (default 2: plenty for a few
+      # dozen feeds; each extra process is another feed fetched in parallel, and more memory).
+      - --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+      - --hostname=worker@%h # a fixed name prefix, so the healthcheck can address this worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    # On `docker compose stop` the worker finishes the tasks it is running (each is limited to 90 s)
+    # before exiting, instead of being killed after Docker's default 10 s.
+    stop_grace_period: 100s
+    healthcheck:
+      # Asks the running worker to answer over the broker, so this proves it is connected to Redis
+      # and alive, not just that a process exists.
+      test:
+        - CMD-SHELL
+        - celery -A app.tasks.celery_app inspect ping --destination worker@$$HOSTNAME --timeout 10 >/dev/null || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+  # The scheduler: it only sends tasks to Redis on a timer, the worker runs them. EXACTLY ONE
+  # instance must ever run: two beats would queue every scheduled task twice. Never use
+  # `--scale beat=2`.
+  beat:
+    <<: *app
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - beat
+      - --loglevel=info
+      - --schedule=/tmp/celerybeat-schedule # the image's /app is read-only for the non-root user
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    # No healthcheck, on purpose: beat has no remote-control/inspect interface to ask, and it is
+    # the container's main process, so if it crashes the container exits and Docker shows that.
+    # A "process exists" check would only repeat what the container state already says.
 
 volumes:
   pgdata:

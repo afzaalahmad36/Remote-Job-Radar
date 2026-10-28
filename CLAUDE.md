@@ -128,7 +128,7 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 ## 6. Core pipelines
 
 **Ingestion → Extraction → Matching**
-1. `ingest_source` (`services/ingestion_service.py`) fetches a source through its `SourceFetcher` (`ingestion/`: RSS now, Telegram later) → stores only `raw_text`, `posted_at` (UTC), `external_id` and `extraction_status=pending` in `jobs`; the structured fields stay NULL until step 2. Idempotent: `INSERT … ON CONFLICT (source_id, external_id) DO NOTHING` (rows inserted in a fixed order), so re-runs and overlapping syncs insert nothing twice. Network I/O never runs inside an open DB transaction: fetch first, then write. `raw_text` is capped at 20,000 characters per post. Changing a source's config URL clears its etag, last_modified and last_error. A failing source never raises: a short sanitized message goes to `sources.last_error` (no IPs, internal hostnames or stack traces) and the other sources are unaffected. RSS fetching: we fetch with httpx and feedparser only parses the bytes (always via a file-like object, never a str/bytes path or URL); `url_safety` runs before the first request and before every redirect hop (redirects are followed manually, max 3); timeouts 5 s connect / 10 s read / 20 s overall; body capped at 2 MB (decoded) and 200 entries; conditional GET via ETag / Last-Modified. Until Celery is wired in, it runs inline from `POST /sources/{id}/sync` (rate-limited per user).
+1. `ingest_source` (`services/ingestion_service.py`) fetches a source through its `SourceFetcher` (`ingestion/`: RSS now, Telegram later) → stores only `raw_text`, `posted_at` (UTC), `external_id` and `extraction_status=pending` in `jobs`; the structured fields stay NULL until step 2. Idempotent: `INSERT … ON CONFLICT (source_id, external_id) DO NOTHING` (rows inserted in a fixed order), so re-runs and overlapping syncs insert nothing twice. Network I/O never runs inside an open DB transaction: fetch first, then write. `raw_text` is capped at 20,000 characters per post. Changing a source's config URL clears its etag, last_modified and last_error. A failing source never raises: a short sanitized message goes to `sources.last_error` (no IPs, internal hostnames or stack traces) and the other sources are unaffected. RSS fetching: we fetch with httpx and feedparser only parses the bytes (always via a file-like object, never a str/bytes path or URL); `url_safety` runs before the first request and before every redirect hop (redirects are followed manually, max 3); timeouts 5 s connect / 10 s read / 20 s overall; body capped at 2 MB (decoded) and 200 entries; conditional GET via ETag / Last-Modified. It runs in the background as Celery tasks (`app/tasks/`, thin wrappers around the services; Redis broker, JSON only, no result backend, `acks_late`, soft 60 s / hard 90 s limits, prefetch 1): `ingest_source(source_id)` (re-loads the source, skips it if deleted, own NullPool engine per run because each task has its own event loop), `ingest_all_active_sources()` (beat, every `INGEST_INTERVAL_MINUTES`: one task per active source, spread over a few seconds), and `purge_expired_refresh_tokens()` (beat, daily: only tokens expired more than 7 days ago, so a rotated-but-unexpired token is always kept for reuse detection). Two runs of one source never overlap: a Redis lock with an expiry (token-owned, 120 s TTL) per source; a run that finds it held is skipped, not queued. `POST /sources/{id}/sync` (owner only, rate-limited per user) just enqueues the task and returns 202 (`queued`, or `already_running` if a sync is in progress); the result appears in `sources.last_synced_at` / `last_error` and `GET /jobs`.
 2. `extract_job` task sends `raw_text` to the LLM with the extraction prompt → validated `JobExtraction` schema → updates the job.
 3. `embed_job` computes the embedding.
 4. `score_job_for_user` combines: cosine similarity (pgvector) for candidate retrieval, then the LLM for a 0-100 score with reasons and missing skills. Store in `job_matches`.
@@ -172,6 +172,7 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 - Use factories (factory-boy) for test data. No shared mutable state between tests.
 - Write tests **alongside each feature**, not after. A feature is not done without tests.
 - Mock: Anthropic API, Telegram, outbound HTTP. Never hit the network in tests.
+- **Tests never use a real Redis or broker** (nor any real network service except the test DB). Use `FakeTaskQueue` / `FakeSourceLocks` (`tests/fakes.py`) through dependency overrides or arguments, and point any Redis setting at `UNREACHABLE_REDIS_URL` (a port where nothing listens). `tests/network_guard.py` enforces this for every test: any other connection raises `NetworkAccessBlockedError`. CI has no Redis service on purpose, and every CI job has a `timeout-minutes`.
 
 ---
 
@@ -182,14 +183,21 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 uv sync
 cp .env.example .env
 
-# run everything in containers (API on http://localhost:8000; db/redis are not published)
+# run everything in containers: api (the only one that migrates and publishes a port,
+# http://localhost:8000), worker, beat, db and redis (db/redis are not published)
 docker compose up --build
+# never scale beat: exactly one scheduler must run (`--scale worker=N` is fine)
 
-# or run the API on the host: needs your own Postgres/Redis, set in .env (DATABASE_URL, REDIS_URL)
+# or run on the host: needs your own Postgres/Redis, set in .env (DATABASE_URL, REDIS_URL)
 uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --no-proxy-headers --reload
-uv run celery -A app.tasks.celery_app worker -l info
-uv run celery -A app.tasks.celery_app beat -l info
+uv run celery -A app.tasks.celery_app worker -l info    # runs the tasks (Linux/macOS)
+uv run celery -A app.tasks.celery_app beat -l info      # sends them on schedule (one instance only)
+# Windows host-run worker: Celery's default prefork pool does not work on Windows, use solo:
+uv run celery -A app.tasks.celery_app worker -l info -P solo
+# NOTE: with -P solo neither the soft (60 s) nor the hard (90 s) task time limit is enforced and
+# only one task runs at a time (CELERY_WORKER_CONCURRENCY is ignored). A feed fetch is still
+# bounded by its own 20 s deadline. The Docker worker runs on Linux with prefork, so it has both.
 
 # quality (run before every commit)
 uv run ruff check . --fix && uv run ruff format .
@@ -220,6 +228,11 @@ AUTH_RATE_LIMIT_WINDOW_SECONDS=60
 # Manual source syncs per user (each makes outbound HTTP requests).
 SYNC_RATE_LIMIT_ATTEMPTS=10
 SYNC_RATE_LIMIT_WINDOW_SECONDS=60
+# How often beat syncs every active source (minimum 5, default 30).
+INGEST_INTERVAL_MINUTES=30
+# Tasks one Celery worker runs at once (1-16, default 2). docker compose passes it to
+# `--concurrency`. Ignored by the solo pool (-P solo), which always runs one task at a time.
+CELERY_WORKER_CONCURRENCY=2
 ANTHROPIC_API_KEY=
 LLM_MODEL_EXTRACTION=
 LLM_MODEL_SCORING=
@@ -270,7 +283,7 @@ Never commit `.env` or Telegram session files. Keep them in `.gitignore`.
 | 6 | Next.js dashboard: filters, score badges, kanban board, CV page | Usable UI against the live API |
 | 7 | Hardening: rate limits, caching, observability, README with architecture diagram + demo GIF, deploy | Public live demo |
 
-**Current phase:** 2
+**Current phase:** 2 — auth ✅, sources CRUD ✅, RSS ingestion ✅, Celery (queue, beat, locks) ✅; Telegram ingestion is the remaining step.
 
 ---
 

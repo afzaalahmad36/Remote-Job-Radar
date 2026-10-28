@@ -10,11 +10,12 @@ from app.core.rate_limit import RateLimiter
 from app.core.security import decode_access_token
 from app.core.url_safety import Resolver, system_resolver
 from app.db.session import get_session
-from app.ingestion.base import SourceFetcher
-from app.models import SourceType, User
+from app.models import User
 from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, PageParams
 from app.services import auth_service
-from app.services.ingestion_service import default_fetchers
+from app.services.sync_service import TaskQueue
+from app.tasks.locking import redis_locks_for
+from app.tasks.queue import CeleryTaskQueue
 
 # `Depends` is FastAPI's dependency injection: FastAPI calls get_settings() for each request
 # and passes the result in. Tests can swap it via `app.dependency_overrides`.
@@ -64,12 +65,12 @@ def get_page_params(
 PageDep = Annotated[PageParams, Depends(get_page_params)]
 
 
-def get_fetchers() -> dict[SourceType, SourceFetcher]:
-    """The fetchers used to sync sources; tests override this so no request leaves the machine."""
-    return default_fetchers()
+def get_task_queue(settings: SettingsDep) -> TaskQueue:
+    """The background-job queue; tests override this so no broker is needed."""
+    return CeleryTaskQueue(redis_locks_for(settings.redis_url))
 
 
-FetchersDep = Annotated[dict[SourceType, SourceFetcher], Depends(get_fetchers)]
+QueueDep = Annotated[TaskQueue, Depends(get_task_queue)]
 
 
 async def rate_limit_sync(request: Request, user: CurrentUserDep) -> None:

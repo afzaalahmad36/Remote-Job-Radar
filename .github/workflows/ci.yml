@@ -16,7 +16,13 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    # A hung step must not run for hours (GitHub's default limit is 6): the whole job normally
+    # takes a few minutes, so 15 is generous and still fails fast.
+    timeout-minutes: 15
 
+    # There is deliberately NO Redis service: tests never use a real Redis or broker (they use
+    # fakes, and tests/network_guard.py fails any test that opens a connection to one).
+    #
     # A throwaway Postgres next to the job. The image matches the local/prod one (pgvector, pg16).
     # Tests refuse to run against any database not named jobradar_test.
     services:
@@ -66,6 +72,7 @@ jobs:
   # Builds the image (no push) so a broken Dockerfile or an out-of-date uv.lock fails the PR.
   docker-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
