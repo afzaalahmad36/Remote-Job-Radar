@@ -99,3 +99,103 @@ def test_cors_origins_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CORS_ORIGINS", raising=False)  # conftest sets it for the app tests
 
     assert make_settings().cors_origins_list == []
+
+
+# --- LLM settings -----------------------------------------------------------------------------
+
+
+def test_llm_defaults_make_no_provider_call_possible() -> None:
+    settings = make_settings()
+
+    assert settings.llm_provider == "none"
+    assert settings.llm_extraction_enabled is False
+    assert settings.llm_model_extraction == ""  # no model name is baked into the code
+    assert settings.gemini_api_key.get_secret_value() == ""
+
+
+def test_llm_budget_defaults_are_small_and_counted_in_requests() -> None:
+    settings = make_settings()
+
+    assert settings.llm_daily_request_cap_per_user == 25
+    assert settings.llm_daily_request_cap_global == 50
+    assert settings.llm_requests_per_minute == 5
+    assert settings.llm_enrichment_give_up_days == 7
+    assert settings.llm_min_post_chars == 500
+    assert settings.llm_request_timeout_seconds == 20.0
+
+
+def test_llm_settings_are_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@db:5432/x")
+    monkeypatch.setenv("REDIS_URL", "redis://redis:6379/0")
+    monkeypatch.setenv("SECRET_KEY", "s3cret")
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("LLM_EXTRACTION_ENABLED", "true")
+    monkeypatch.setenv("LLM_MODEL_EXTRACTION", "some-model")
+    monkeypatch.setenv("GEMINI_API_KEY", "a-key")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert (settings.llm_provider, settings.llm_extraction_enabled) == ("gemini", True)
+    assert settings.llm_model_extraction == "some-model"
+    assert settings.gemini_api_key.get_secret_value() == "a-key"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"llm_extraction_enabled": True}, "LLM_PROVIDER"),
+        ({"llm_extraction_enabled": True, "llm_provider": "gemini"}, "LLM_MODEL_EXTRACTION"),
+        (
+            {"llm_extraction_enabled": True, "llm_provider": "gemini", "llm_model_extraction": "m"},
+            "GEMINI_API_KEY",
+        ),
+    ],
+)
+def test_enabling_extraction_requires_a_complete_provider_setup(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        make_settings(**overrides)  # type: ignore[arg-type]
+
+
+def test_a_provider_may_be_named_without_being_enabled() -> None:
+    make_settings(llm_provider="gemini")  # no error: the kill switch is still off
+
+
+def test_the_fake_provider_is_refused_in_production_only() -> None:
+    make_settings(llm_provider="fake")  # development
+    with pytest.raises(ValidationError, match="fake"):
+        make_settings(llm_provider="fake", env="production", secret_key="x" * 32)
+
+
+def test_the_gemini_endpoint_must_be_https() -> None:
+    with pytest.raises(ValidationError, match="https"):
+        make_settings(llm_provider="gemini", gemini_base_url="http://generativelanguage.example")
+
+
+@pytest.mark.parametrize("name", ["llm_request_timeout_seconds", "llm_requests_per_minute"])
+def test_llm_numbers_must_be_positive(name: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{name: 0})  # type: ignore[arg-type]
+
+
+def test_the_gemini_key_is_hidden_in_repr_and_in_validation_errors() -> None:
+    key = "AIza-very-secret-key"
+
+    assert key not in repr(make_settings(gemini_api_key=key))
+    with pytest.raises(ValidationError) as error:
+        make_settings(gemini_api_key=key, llm_provider="gemini", llm_extraction_enabled=True)
+    assert key not in str(error.value)
+
+
+@pytest.mark.parametrize("value", ["-1", "5001"])
+def test_llm_min_post_chars_must_be_in_range(value: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(llm_min_post_chars=value)
+
+
+def test_llm_min_post_chars_must_be_below_the_input_limit() -> None:
+    with pytest.raises(ValidationError, match="LLM_MIN_POST_CHARS"):
+        make_settings(llm_min_post_chars="2000", llm_max_input_chars="1500")
+
+    assert make_settings(llm_min_post_chars="0").llm_min_post_chars == 0
