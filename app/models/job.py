@@ -14,6 +14,25 @@ class RemotePolicy(enum.StrEnum):
     ONSITE = "onsite"
 
 
+class Seniority(enum.StrEnum):
+    INTERN = "intern"
+    JUNIOR = "junior"
+    MID = "mid"
+    SENIOR = "senior"
+    LEAD = "lead"
+    PRINCIPAL = "principal"
+
+
+class SalaryPeriod(enum.StrEnum):
+    """What the salary amounts of a post are per, exactly as the post states it."""
+
+    YEAR = "year"
+    MONTH = "month"
+    WEEK = "week"
+    DAY = "day"
+    HOUR = "hour"
+
+
 class ExtractionStatus(enum.StrEnum):
     PENDING = "pending"
     EXTRACTED = "extracted"
