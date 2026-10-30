@@ -12,10 +12,12 @@ import time
 import pytest
 
 from app.extraction.contacts import find_emails, mask_contact_details
+from app.extraction.merge import merge
 from app.extraction.rules import extract_with_rules
 from app.extraction.salary import find_salary
 from app.extraction.stack import find_stack
 from app.ingestion.text import MAX_TEXT_CHARS
+from app.llm.prompts import prepare_post_text
 
 TIME_LIMIT_SECONDS = 0.5
 
@@ -73,6 +75,8 @@ def test_each_building_block_is_fast_on_hostile_input(text: str) -> None:
     mask_contact_details(text)
     find_salary(text)
     find_stack(text)
+    prepare_post_text(text, 12_000)
+    merge(extract_with_rules(text), None, text)
     elapsed = time.perf_counter() - started
 
     assert elapsed < TIME_LIMIT_SECONDS * 2, f"took {elapsed:.2f}s"

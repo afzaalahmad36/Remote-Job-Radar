@@ -5,6 +5,7 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MIN_PRODUCTION_SECRET_LENGTH = 32
+MAX_LLM_REQUEST_TIMEOUT_SECONDS = 25.0  # see app/extraction/limits.py for why it is capped
 
 
 class Settings(BaseSettings):
@@ -42,6 +43,56 @@ class Settings(BaseSettings):
     # Max manual source syncs per user within the window (each one makes outbound requests).
     sync_rate_limit_attempts: int = Field(default=10, gt=0)
     sync_rate_limit_window_seconds: int = Field(default=60, gt=0)
+
+    # --- LLM extraction (all optional: with the defaults nothing ever calls a provider) ---------
+    # "none" = rules only. "fake" is for local development and is refused in production.
+    # "ollama" is a reserved name: its adapter is not written yet.
+    llm_provider: Literal["none", "gemini", "ollama", "fake"] = "none"
+    # The kill switch. Off by default: turning a provider on is always a deliberate act.
+    llm_extraction_enabled: bool = False
+    # No default on purpose: model names change, so they live in the environment, not in code.
+    llm_model_extraction: str = ""
+    gemini_api_key: SecretStr = SecretStr("")
+    # The public endpoint; a setting only so the host is not hard-coded in the adapter.
+    gemini_base_url: str = "https://generativelanguage.googleapis.com"
+    # "" leaves the field out of the request. Not every model accepts every level.
+    gemini_thinking_level: Literal["", "minimal", "low", "medium", "high"] = ""
+    # Timeout of ONE provider request. The cap keeps a whole extraction (at most two requests)
+    # inside the Celery time limits: see app/extraction/limits.py.
+    llm_request_timeout_seconds: float = Field(
+        default=20.0, gt=0, le=MAX_LLM_REQUEST_TIMEOUT_SECONDS
+    )
+    llm_max_output_tokens: int = Field(default=1024, ge=256, le=8192)
+    # Characters of a post sent to a provider (longer posts keep their start and end).
+    llm_max_input_chars: int = Field(default=12_000, ge=1_000, le=20_000)
+    # A post shorter than this is not sent to a provider: it is a headline or a stub, and a model
+    # cannot invent what the text does not say. 0 turns the gate off. 500 is based on 55 real
+    # posts: every stub was 172-268 characters, every real post at least 1,945.
+    llm_min_post_chars: int = Field(default=500, ge=0, le=5_000)
+    # Budgets counted in provider REQUESTS, sized for a free tier. Check your own limits in the
+    # provider's console and raise these deliberately; the defaults are small on purpose.
+    llm_daily_request_cap_per_user: int = Field(default=25, ge=0)
+    llm_daily_request_cap_global: int = Field(default=50, ge=0)
+    llm_requests_per_minute: int = Field(default=5, ge=1)
+    # After this many days a job that still waits for the LLM keeps its rules data and is skipped.
+    llm_enrichment_give_up_days: int = Field(default=7, ge=1)
+
+    @model_validator(mode="after")
+    def _check_llm_settings(self) -> Self:
+        if self.llm_provider == "fake" and self.env == "production":
+            raise ValueError("LLM_PROVIDER=fake is not allowed in production")
+        if self.llm_provider == "gemini" and not self.gemini_base_url.startswith("https://"):
+            raise ValueError("GEMINI_BASE_URL must start with https://")
+        if self.llm_min_post_chars >= self.llm_max_input_chars:
+            raise ValueError("LLM_MIN_POST_CHARS must be smaller than LLM_MAX_INPUT_CHARS")
+        if self.llm_extraction_enabled:
+            if self.llm_provider == "none":
+                raise ValueError("LLM_EXTRACTION_ENABLED needs LLM_PROVIDER to be set")
+            if not self.llm_model_extraction.strip():
+                raise ValueError("LLM_EXTRACTION_ENABLED needs LLM_MODEL_EXTRACTION")
+            if self.llm_provider == "gemini" and not self.gemini_api_key.get_secret_value():
+                raise ValueError("LLM_PROVIDER=gemini needs GEMINI_API_KEY")
+        return self
 
     @model_validator(mode="after")
     def _reject_weak_secret_key_in_production(self) -> Self:
