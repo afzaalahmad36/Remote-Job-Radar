@@ -29,3 +29,6 @@ frontend/out/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local run records and scratch files (never committed)
+.local/

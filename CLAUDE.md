@@ -220,6 +220,19 @@ uv run pytest -q --cov=app
 # migrations
 uv run alembic revision --autogenerate -m "describe change"
 uv run alembic upgrade head
+
+# manual extraction smoke test (scripts/try_extraction.py: run by hand, never by CI or app code).
+# Reads jobs from DATABASE_URL, read-only (the connection refuses writes); writes nothing.
+uv run python -m scripts.try_extraction                      # rules only, no network (default)
+uv run python -m scripts.try_extraction --source-id <uuid> --limit 100
+# A real provider call needs BOTH flags. N is mandatory and capped at 10 in the script. The run
+# lists the job ids and sizes and asks for confirmation (--yes skips the question), stops at the
+# budget or on the first 429 or rejected request (never retries), sends only posts that need a
+# request and pass the length gate (emails/phones masked), and saves a run record without post
+# text or key under .local/ (git-ignored). Needs LLM_PROVIDER, LLM_MODEL_EXTRACTION and
+# GEMINI_API_KEY in .env; it turns the kill switch on for that process only, never in .env.
+uv run python -m scripts.try_extraction --allow-provider --max-requests 3
+uv run python -m scripts.try_extraction --eval labeled.json  # stub: only checks the file format
 ```
 
 ---
@@ -322,7 +335,7 @@ Never commit `.env` or Telegram session files. Keep them in `.gitignore`.
 
 **Deferred: Telegram ingestion.** It needs a Telegram API application and a user session, and the owner has only a personal account for now. The `SourceFetcher` interface and the `telegram` source type are in place so it can be added later without touching the rest of the pipeline. Phase 2 is otherwise complete.
 
-**Current phase:** 3 — rules-first extraction. Done: rules, merge, schema, provider-agnostic client with the Gemini adapter. Next: the manual `scripts/try_extraction.py` (rules-only dry run by default; a provider call needs `--allow-provider` and `--max-requests`), then DB state and migrations, the extraction service with request budgets, then tasks and the retry endpoint. The Ollama adapter comes on request.
+**Current phase:** 3 — rules-first extraction. Done: rules, merge, schema, provider-agnostic client with the Gemini adapter, the manual `scripts/try_extraction.py` (the Gemini adapter has only been tested against the docs and a mock: its first real request comes through this script). Next: DB state and migrations, the extraction service with request budgets, then tasks and the retry endpoint. The Ollama adapter comes on request.
 
 ---
 
