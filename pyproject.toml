@@ -34,7 +34,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.mypy]
 strict = true
-files = ["app"]
+files = ["app", "scripts"]
 
 [[tool.mypy.overrides]]
 # These libraries ship no type hints; what they return is treated as Any and narrowed by us.

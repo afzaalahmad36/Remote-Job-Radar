@@ -32,3 +32,7 @@ Thumbs.db
 
 # Local run records and scratch files (never committed)
 .local/
+
+# Local Compose override (publishes the db port on this machine only)
+docker-compose.override.yml
+docker-compose.override.yaml

@@ -40,9 +40,10 @@ from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import select, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from app.core.config import Settings, get_settings
 from app.extraction.merge import (
@@ -66,6 +67,7 @@ from app.llm.client import build_client
 from app.llm.prompts import EXTRACT_JOB_V1, build_extraction_request
 from app.models import Job
 
+EXPECTED_DATABASE = "jobradar"  # the development database; never the test one or another project's
 HARD_MAX_REQUESTS = 10  # not a setting and not a flag: raising it means editing this file
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
@@ -441,6 +443,29 @@ class PostRow:
     text: str
 
 
+def database_target(database_url: str) -> str:
+    """ "host:port/name" of the database, after checking it is the one this script may read.
+
+    The password is never part of the result. The name is checked before any connection is made.
+    """
+    try:
+        url = make_url(database_url)
+    except ArgumentError:
+        raise ScriptError("DATABASE_URL is not a valid database URL") from None
+    if url.database != EXPECTED_DATABASE:
+        raise ScriptError(
+            f"refusing to read database {url.database!r} on {url.host}:{url.port}: "
+            f"this script only reads a database named {EXPECTED_DATABASE!r}"
+        )
+    return f"{url.host or '(local socket)'}:{url.port or 5432}/{url.database}"
+
+
+async def ensure_jobs_table(connection: AsyncConnection) -> None:
+    """Refuse a database that has no `jobs` table (a wrong or unmigrated database)."""
+    if await connection.scalar(text("select to_regclass('jobs')::text")) is None:
+        raise ScriptError("the database has no 'jobs' table: wrong database, or not migrated")
+
+
 async def load_posts(database_url: str, source_id: uuid.UUID | None, limit: int) -> list[PostRow]:
     """The newest jobs. The connection itself is read-only (Postgres refuses any write)."""
     engine = create_async_engine(
@@ -453,6 +478,7 @@ async def load_posts(database_url: str, source_id: uuid.UUID | None, limit: int)
         query = query.where(Job.source_id == source_id)
     try:
         async with engine.connect() as connection:
+            await ensure_jobs_table(connection)
             result = await connection.execute(query.limit(limit))
             return [PostRow(row.id, row.raw_text) for row in result]
     except (OSError, SQLAlchemyError, asyncpg.PostgresError) as error:
@@ -563,7 +589,9 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     settings = get_settings()
+    target = database_target(settings.database_url)  # refuses the wrong database up front
     client = make_client(settings) if args.allow_provider else None  # fail before reading
+    print(f"Reading (read-only) from database {target}")
     rows = asyncio.run(load_posts(settings.database_url, args.source_id, args.limit))
     if not rows:
         print("No jobs found. Sync a source first (the database is only read).")

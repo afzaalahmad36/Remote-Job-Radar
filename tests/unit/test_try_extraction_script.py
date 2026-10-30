@@ -16,7 +16,9 @@ from scripts.try_extraction import (
     RequestBudget,
     ScriptError,
     analyze,
+    database_target,
     drop_duplicate_texts,
+    ensure_jobs_table,
     field_coverage,
     load_labels,
     parse_args,
@@ -253,3 +255,48 @@ def test_a_labels_file_is_checked_against_the_documented_format(tmp_path: Path) 
         load_labels(bad)
     with pytest.raises(ScriptError, match="cannot read"):
         load_labels(tmp_path / "missing.json")
+
+
+# --- which database may be read ----------------------------------------------------------------
+
+
+def test_the_target_is_shown_without_the_password() -> None:
+    url = "postgresql+asyncpg://postgres:hunter2@localhost:5434/jobradar"
+
+    shown = database_target(url)
+
+    assert shown == "localhost:5434/jobradar"
+    assert "hunter2" not in shown and "postgres" not in shown
+
+
+def test_the_default_port_is_shown_when_the_url_has_none() -> None:
+    assert database_target("postgresql+asyncpg://u:p@db/jobradar") == "db:5432/jobradar"
+
+
+@pytest.mark.parametrize("name", ["jobradar_test", "postgres", "otherproject", "JobRadar"])
+def test_any_other_database_is_refused_before_connecting(name: str) -> None:
+    with pytest.raises(ScriptError, match="refusing") as caught:
+        database_target(f"postgresql+asyncpg://u:secret@localhost:5432/{name}")
+
+    assert "secret" not in str(caught.value)
+
+
+def test_an_unparsable_or_nameless_url_is_refused() -> None:
+    for bad in ("not a url", "postgresql+asyncpg://u:p@localhost:5432"):
+        with pytest.raises(ScriptError):
+            database_target(bad)
+
+
+class StubConnection:
+    def __init__(self, table: str | None) -> None:
+        self._table = table
+
+    async def scalar(self, statement: object) -> str | None:
+        return self._table
+
+
+async def test_a_database_without_a_jobs_table_is_refused() -> None:
+    with pytest.raises(ScriptError, match="no 'jobs' table"):
+        await ensure_jobs_table(StubConnection(None))  # type: ignore[arg-type]
+
+    await ensure_jobs_table(StubConnection("jobs"))  # type: ignore[arg-type]

@@ -233,6 +233,17 @@ uv run python -m scripts.try_extraction --source-id <uuid> --limit 100
 # GEMINI_API_KEY in .env; it turns the kill switch on for that process only, never in .env.
 uv run python -m scripts.try_extraction --allow-provider --max-requests 3
 uv run python -m scripts.try_extraction --eval labeled.json  # stub: only checks the file format
+# The script prints the database it reads (host:port/name, never the password) and refuses any
+# database not named `jobradar` or without a `jobs` table (so never the test database).
+# The Compose db publishes no port. To reach it from the host, create a LOCAL, git-ignored
+# docker-compose.override.yml (a pre-commit hook rejects it even with `git add -f`):
+#   services:
+#     db:
+#       ports: ["127.0.0.1:5434:5432"]
+# then `docker compose up -d db` recreates only the db service (data stays in its volume) and:
+#   DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar
+#   uv run python -m scripts.try_extraction
+# Compose merges the override into every `docker compose` command, so delete the file to go back.
 ```
 
 ---

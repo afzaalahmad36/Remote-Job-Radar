@@ -15,7 +15,14 @@ repos:
         types_or: [python, pyi]
       - id: mypy
         name: mypy
-        entry: uv run mypy app
+        entry: uv run mypy
         language: system
         types: [python]
         pass_filenames: false
+      # docker-compose.override.yml publishes the database port for local tooling. It is git-ignored;
+      # this stops `git add -f` from sneaking it into a commit anyway.
+      - id: no-compose-override
+        name: docker-compose.override.yml must not be committed
+        entry: docker-compose.override.yml is local only (see CLAUDE.md section 10)
+        language: fail
+        files: (^|/)docker-compose\.override\.ya?ml$
