@@ -100,8 +100,11 @@ class GeminiClient:
                 async with client.stream("POST", self._url, json=payload, headers=headers) as reply:
                     _raise_for_status(reply)
                     return await _read_capped(reply)
+        except httpx.ConnectTimeout:
+            raise LLMTransientError("connect timeout") from None  # never reached the server
         except httpx.TimeoutException:
-            raise LLMTransientError("timeout") from None
+            # Sent, but no answer in time: the provider may still have counted the request.
+            raise LLMTransientError("no response in time") from None
         except httpx.HTTPError:
             raise LLMTransientError("connection failed") from None
 

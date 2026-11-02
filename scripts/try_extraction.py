@@ -411,7 +411,25 @@ def print_coverage(analyses: list[PostAnalysis], duplicates_skipped: int) -> Non
     print(f"  would trigger a provider request: {needing}")
 
 
-def print_result(index: int, record: RequestRecord) -> None:
+def timeout_hint(record: RequestRecord, limit_seconds: float) -> str | None:
+    """A one-line explanation for a timeout (a fixed phrase and numbers only), else None."""
+    waited = f"waited {record.latency_ms / 1000:.1f} s of the {limit_seconds:g} s limit"
+    if record.reason == "no response in time":
+        return f"{waited}: the request was sent, so the provider may still have counted it"
+    if record.reason == "connect timeout":
+        return f"{waited}: the connection was never made, so nothing reached the provider"
+    return None
+
+
+def settings_summary(settings: Settings) -> str:
+    level = settings.gemini_thinking_level or "model default"
+    return (
+        f"thinking level: {level}, request timeout: {settings.llm_request_timeout_seconds:g} s, "
+        f"max output tokens: {settings.llm_max_output_tokens} (includes thinking)"
+    )
+
+
+def print_result(index: int, record: RequestRecord, timeout_seconds: float) -> None:
     tokens = record.tokens
     token_text = "tokens n/a"
     if tokens:
@@ -422,6 +440,8 @@ def print_result(index: int, record: RequestRecord) -> None:
         f"{record.latency_ms} ms, {token_text}"
     )
     if record.outcome != "ok":
+        if hint := timeout_hint(record, timeout_seconds):
+            print(f"    {hint}")
         return
     verdict = "yes" if record.validated else f"NO ({record.validation_error})"
     print(f"    validated against JobExtraction: {verdict}")
@@ -620,6 +640,7 @@ def run_provider(
         f"\nAbout to send {len(candidates)} request(s) (budget {args.max_requests}, hard cap "
         f"{HARD_MAX_REQUESTS}) to {client.name} / {client.model}:"
     )
+    print(f"  {settings_summary(settings)}")
     for post in candidates:
         prepared = build_extraction_request(post.text, max_chars=settings.llm_max_input_chars)
         note = ", middle omitted" if prepared.truncated else ""
@@ -636,7 +657,7 @@ def run_provider(
         run_requests(client, candidates, budget, max_chars=settings.llm_max_input_chars)
     )
     for index, record in enumerate(records, start=1):
-        print_result(index, record)
+        print_result(index, record, settings.llm_request_timeout_seconds)
     path = save_record(RUN_RECORD_DIR, client=client, budget=budget, records=records)
     print(f"\n{budget.used} request(s) made. Stopped early: {budget.stop_reason or 'no'}")
     print(f"Run record: {path}")

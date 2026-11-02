@@ -113,6 +113,24 @@ def test_llm_defaults_make_no_provider_call_possible() -> None:
     assert settings.gemini_api_key.get_secret_value() == ""
 
 
+def test_the_thinking_level_defaults_to_low_and_the_output_budget_covers_thinking() -> None:
+    settings = make_settings()
+
+    assert settings.gemini_thinking_level == "low"
+    assert settings.llm_max_output_tokens == 2048
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "high", ""])
+def test_the_allowed_thinking_levels(level: str) -> None:
+    assert make_settings(gemini_thinking_level=level).gemini_thinking_level == level
+
+
+@pytest.mark.parametrize("level", ["minimal", "LOW", "max", "off"])
+def test_a_thinking_level_the_model_rejects_fails_at_startup(level: str) -> None:
+    with pytest.raises(ValidationError, match="gemini_thinking_level"):
+        make_settings(gemini_thinking_level=level)
+
+
 def test_llm_budget_defaults_are_small_and_counted_in_requests() -> None:
     settings = make_settings()
 
