@@ -279,11 +279,13 @@ LLM_MODEL_EXTRACTION=
 # A free key from Google AI Studio. Leave billing off for that project. Never commit it.
 GEMINI_API_KEY=
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com
-# Optional (low | medium | high | minimal); empty leaves it out. Not every model accepts every level.
-GEMINI_THINKING_LEVEL=
+# low | medium | high; empty leaves it out (the model's own default: medium on gemini-3.8-flash,
+# which was too slow for one request). gemini-3.8-flash rejects "minimal", so it is not allowed.
+GEMINI_THINKING_LEVEL=low
 # One provider request (at most 25 s: a run makes at most 2 and must fit Celery's 60 s soft limit).
 LLM_REQUEST_TIMEOUT_SECONDS=20
-LLM_MAX_OUTPUT_TOKENS=1024
+# Includes the model's thinking tokens: too small a value cuts the answer off.
+LLM_MAX_OUTPUT_TOKENS=2048
 # Characters of a post sent to a provider (longer posts keep their start and end).
 LLM_MAX_INPUT_CHARS=12000
 # A post shorter than this skips the provider and stays rules-only (0 = off). 500 comes from 55
