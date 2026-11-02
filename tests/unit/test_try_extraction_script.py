@@ -5,10 +5,20 @@ import json
 import uuid
 from pathlib import Path
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
-from app.llm.base import LLMConfigError, LLMRateLimited, LLMTransientError
+from app.llm.base import (
+    LLMConfigError,
+    LLMRateLimited,
+    LLMTransientError,
+    Purpose,
+)
+from app.llm.client import GuardedClient
+from app.llm.prompts import EXTRACT_JOB_V1_SCHEMA
 from app.llm.providers.fake import DEFAULT_RESPONSE, FakeLLMClient
+from app.llm.providers.gemini import GeminiClient
 from scripts.try_extraction import (
     HARD_MAX_REQUESTS,
     PostAnalysis,
@@ -16,6 +26,7 @@ from scripts.try_extraction import (
     RequestBudget,
     ScriptError,
     analyze,
+    build_ping_request,
     database_target,
     drop_duplicate_texts,
     ensure_jobs_table,
@@ -23,6 +34,9 @@ from scripts.try_extraction import (
     load_labels,
     parse_args,
     provider_settings,
+    request_fields,
+    run_ping,
+    run_ping_command,
     run_requests,
     save_record,
     select_candidates,
@@ -344,3 +358,178 @@ def test_the_settings_summary_shows_the_thinking_level_timeout_and_output_budget
     assert "request timeout: 25 s" in summary
     assert "max output tokens: 2048" in summary
     assert "model default" in settings_summary(settings_with(gemini_thinking_level=""))
+
+
+# --- the connectivity ping ---------------------------------------------------------------------
+
+PING_PARSE = ["--ping", "--allow-provider"]
+
+
+def test_ping_needs_the_provider_flag_and_defaults_to_level_one() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--ping"])
+
+    args = parse_args(PING_PARSE)
+
+    assert args.ping is True and args.ping_level is None
+
+
+@pytest.mark.parametrize("level", ["1", "2", "3"])
+def test_the_ping_levels_are_accepted(level: str) -> None:
+    assert parse_args([*PING_PARSE, "--ping-level", level]).ping_level == int(level)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [*PING_PARSE, "--ping-level", "4"],
+        [*PING_PARSE, "--ping-level", "0"],
+        ["--ping-level", "2"],  # a level without --ping
+        [*PING_PARSE, "--max-requests", "1"],  # a ping is always exactly one request
+        [*PING_PARSE, "--eval", "x.json"],
+        [*PING_PARSE, "--source-id", str(uuid.uuid4())],
+    ],
+)
+def test_bad_ping_options_are_refused(bad: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(bad)
+
+
+def test_level_one_is_the_smallest_request() -> None:
+    request = build_ping_request(1, max_chars=12_000)
+
+    assert request.purpose is Purpose.CONNECTIVITY_CHECK
+    assert request.system == "" and request.json_schema is None and request.store is None
+
+
+def test_level_two_adds_a_system_instruction_and_store_false() -> None:
+    request = build_ping_request(2, max_chars=12_000)
+
+    assert request.system != "" and request.store is False and request.json_schema is None
+    assert request.user == build_ping_request(1, max_chars=12_000).user  # the same fixed input
+
+
+def test_level_three_sends_the_real_schema_with_a_fictional_post_only() -> None:
+    request = build_ping_request(3, max_chars=12_000)
+
+    assert request.purpose is Purpose.JOB_POST_EXTRACTION
+    assert request.json_schema == EXTRACT_JOB_V1_SCHEMA and request.store is False
+    assert "Example Corp" in request.user and "fictional" in request.user
+
+
+async def body_fields_sent(level: int) -> tuple[set[str], list[str]]:
+    """What the real Gemini adapter puts in the body for a level, next to what the script says."""
+    seen: list[httpx.Request] = []
+    answer = {
+        "status": "completed",
+        "steps": [{"type": "model_output", "content": [{"text": "x"}]}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=answer)
+
+    client = GeminiClient(
+        api_key=SecretStr("k"),
+        model="gemini-3.8-flash",
+        base_url="https://generativelanguage.googleapis.com",
+        timeout_seconds=5,
+        max_output_tokens=100,
+        thinking_level="low",
+        transport=httpx.MockTransport(handler),
+    )
+    request = build_ping_request(level, max_chars=12_000)
+    await client.complete(request)
+    claimed = request_fields(request, settings_with(gemini_thinking_level="low"))
+    return set(json.loads(seen[0].content)), claimed
+
+
+@pytest.mark.parametrize("level", [1, 2, 3])
+async def test_the_printed_field_list_matches_what_the_adapter_really_sends(level: int) -> None:
+    sent, claimed = await body_fields_sent(level)
+
+    names = {field.split("(")[0].split("=")[0] for field in claimed}
+
+    assert names == sent
+
+
+async def test_each_level_adds_exactly_the_fields_it_is_documented_to_add() -> None:
+    fields = {level: (await body_fields_sent(level))[0] for level in (1, 2, 3)}
+
+    assert fields[1] == {"model", "input", "generation_config"}
+    assert fields[2] == fields[1] | {"system_instruction", "store"}
+    assert fields[3] == fields[2] | {"response_format"}
+
+
+async def test_every_ping_level_is_allowed_through_the_guard_on_a_hosted_provider() -> None:
+    for level in (1, 2, 3):
+        inner = FakeLLMClient(local=False)
+
+        await GuardedClient(inner).complete(build_ping_request(level, max_chars=12_000))
+
+        assert len(inner.requests) == 1
+
+
+async def test_a_ping_is_exactly_one_request_and_records_the_reply() -> None:
+    client = FakeLLMClient(["pong"])
+    budget = RequestBudget(1)
+
+    record = await run_ping(client, build_ping_request(1, max_chars=12_000), 1, budget)
+
+    assert len(client.requests) == budget.used == 1
+    assert record.outcome == "ok" and record.model_text == "pong"
+    assert record.job_id == "ping-level-1" and record.validated is False
+
+
+async def test_level_three_checks_the_answer_against_the_extraction_schema() -> None:
+    good = json.dumps({**json.loads(DEFAULT_RESPONSE), "title": "Senior Python Developer"})
+    request = build_ping_request(3, max_chars=12_000)
+
+    ok = await run_ping(FakeLLMClient([good]), request, 3, RequestBudget(1))
+    bad = await run_ping(FakeLLMClient(["not json"]), request, 3, RequestBudget(1))
+
+    assert ok.validated is True and ok.merged_values["title"] == "Senior Python Developer"
+    assert bad.validated is False and bad.validation_error is not None
+
+
+async def test_a_rate_limited_ping_is_recorded_and_stops() -> None:
+    budget = RequestBudget(1)
+
+    record = await run_ping(
+        FakeLLMClient([LLMRateLimited(5.0)]), build_ping_request(2, max_chars=12_000), 2, budget
+    )
+
+    assert record.outcome == "rate_limited"
+    assert budget.stop_reason is not None and "429" in budget.stop_reason
+
+
+def test_the_ping_command_confirms_sends_one_request_and_saves_a_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = FakeLLMClient(["pong"])
+    monkeypatch.setattr("scripts.try_extraction.make_client", lambda settings: client)
+    monkeypatch.setattr("scripts.try_extraction.RUN_RECORD_DIR", tmp_path)
+    monkeypatch.setattr("scripts.try_extraction.confirm", lambda question: True)
+    args = parse_args([*PING_PARSE, "--ping-level", "2"])
+
+    assert run_ping_command(args, settings_with(llm_request_timeout_seconds=25)) == 0
+
+    shown = capsys.readouterr().out
+    assert "level 2" in shown and "system_instruction" in shown and "store=false" in shown
+    assert "request timeout: 25 s" in shown
+    assert len(client.requests) == 1
+    [saved] = tmp_path.glob("*.json")
+    assert json.loads(saved.read_text(encoding="utf-8"))["mode"] == "ping level 2"
+
+
+def test_declining_the_confirmation_sends_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = FakeLLMClient(["pong"])
+    monkeypatch.setattr("scripts.try_extraction.make_client", lambda settings: client)
+    monkeypatch.setattr("scripts.try_extraction.RUN_RECORD_DIR", tmp_path)
+    monkeypatch.setattr("scripts.try_extraction.confirm", lambda question: False)
+
+    assert run_ping_command(parse_args(PING_PARSE), settings_with()) == 0
+
+    assert client.requests == [] and list(tmp_path.iterdir()) == []

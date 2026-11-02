@@ -33,6 +33,12 @@ MAX_RETRY_AFTER_SECONDS = 3600.0
 USER_AGENT = "RemoteJobRadar/0.1"
 
 
+def bare_model_name(model: str) -> str:
+    """The model id the Interactions docs use ("gemini-3.8-flash"). Google's SDK snippets and the
+    Models API write "models/gemini-3.8-flash"; either spelling in .env gives the same request."""
+    return model.strip().removeprefix("models/")
+
+
 class GeminiClient:
     name = "gemini"
     local = False  # a hosted service: only public text may be sent (see Purpose)
@@ -48,7 +54,7 @@ class GeminiClient:
         thinking_level: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.model = model
+        self.model = bare_model_name(model)
         self._api_key = api_key
         self._url = f"{base_url.rstrip('/')}/v1beta/interactions"
         self._timeout = httpx.Timeout(
@@ -69,18 +75,22 @@ class GeminiClient:
         config: dict[str, Any] = {"max_output_tokens": self._max_output_tokens}
         if self._thinking_level:
             config["thinking_level"] = self._thinking_level
-        return {
+        body: dict[str, Any] = {
             "model": self.model,
-            "system_instruction": request.system,
             "input": request.user,
             "generation_config": config,
-            "response_format": {
+        }
+        if request.system:
+            body["system_instruction"] = request.system
+        if request.json_schema is not None:
+            body["response_format"] = {
                 "type": "text",
                 "mime_type": "application/json",
                 "schema": request.json_schema,
-            },
-            "store": False,  # do not keep the interaction on the provider's side
-        }
+            }
+        if request.store is not None:
+            body["store"] = request.store  # False: do not keep the interaction at the provider
+        return body
 
     async def _post(self, payload: dict[str, Any]) -> bytes:
         # The key travels in a header, never in the URL, so it cannot end up in logs or errors.

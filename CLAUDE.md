@@ -152,7 +152,7 @@ Conventions: UUID primary keys, `created_at`/`updated_at` timestamps (UTC, timez
 ## 7. LLM guidelines
 
 - **No paid API is used anywhere**, and no key for one belongs in this repo. Providers are a free Gemini key (billing left off on that project) or a local Ollama. `LLM_PROVIDER` is `none` (rules only, the default), `gemini`, `ollama` (reserved) or `fake` (development only; refused in production). `LLM_EXTRACTION_ENABLED` is a kill switch and is off by default.
-- **Privacy: only public job-post text may be sent to a hosted free-tier provider. A CV and any other personal data are never sent to one.** A free tier may use what it receives to improve its products and humans may read it. Emails and phone numbers are removed from a post before it is sent. The rule is enforced in code: every request declares a `Purpose`, and `GuardedClient` refuses to send personal data or an unlisted purpose to a provider that is not `local`. CV work (Phase 4) may use only a local provider.
+- **Privacy: only public job-post text may be sent to a hosted free-tier provider. A CV and any other personal data are never sent to one.** A free tier may use what it receives to improve its products and humans may read it. Emails and phone numbers are removed from a post before it is sent. The rule is enforced in code: every request declares a `Purpose`, and `GuardedClient` refuses to send personal data or an unlisted purpose to a provider that is not `local`. The only other hosted purpose is `connectivity_check` (a fixed harmless sentence for the script's `--ping`); it is also the only one allowed to leave the provider's retention default (`store=None`), so `GuardedClient` accepts it only when the input equals the fixed `PING_INPUT` exactly, the system text is empty or `PING_SYSTEM`, and there is no schema: job text can never travel under it. CV work (Phase 4) may use only a local provider.
 - Model names come from settings (`LLM_MODEL_EXTRACTION`), not code. They change often: check the provider's current model list.
 - Prompts live in `app/llm/prompts.py` as versioned constants (`EXTRACT_JOB_V1`). Bump the version when changing wording and note it in the commit.
 - Request JSON-only output with a schema and validate with Pydantic. Do not send sampling parameters such as `temperature`: current models ignore or reject them.
@@ -233,6 +233,11 @@ uv run python -m scripts.try_extraction --source-id <uuid> --limit 100
 # GEMINI_API_KEY in .env; it turns the kill switch on for that process only, never in .env.
 uv run python -m scripts.try_extraction --allow-provider --max-requests 3
 uv run python -m scripts.try_extraction --eval labeled.json  # stub: only checks the file format
+# Connectivity ping: ONE real request with fixed text (no database, no stored post) to check the key,
+# endpoint and request shape. It shows the body field names and asks for confirmation. Levels:
+# 1 = model + input + generation_config; 2 = + system_instruction + store=false; 3 = + the JSON-schema
+# response_format with the real prompt and a fictional job post. Use the lowest level first.
+uv run python -m scripts.try_extraction --ping --ping-level 1 --allow-provider
 # The script prints the database it reads (host:port/name, never the password) and refuses any
 # database not named `jobradar` or without a `jobs` table (so never the test database).
 # The Compose db publishes no port. To reach it from the host, create a LOCAL, git-ignored
@@ -274,7 +279,8 @@ CELERY_WORKER_CONCURRENCY=2
 LLM_PROVIDER=none
 # Kill switch. Off by default; on requires a provider, a model and (for gemini) a key.
 LLM_EXTRACTION_ENABLED=false
-# No default: model names change, so look up a current one in the provider's docs.
+# No default: model names change, so look up a current one in the provider's docs. For Gemini
+# both "gemini-3.8-flash" and "models/gemini-3.8-flash" work: the adapter sends the bare id.
 LLM_MODEL_EXTRACTION=
 # A free key from Google AI Studio. Leave billing off for that project. Never commit it.
 GEMINI_API_KEY=
