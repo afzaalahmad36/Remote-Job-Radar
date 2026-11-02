@@ -21,6 +21,8 @@ from app.llm.base import (
     LLMRateLimited,
     LLMRequest,
     LLMResponse,
+    Purpose,
+    is_fixed_ping,
 )
 from app.llm.providers.fake import FakeLLMClient
 from app.llm.providers.gemini import GeminiClient
@@ -67,10 +69,17 @@ class GuardedClient:
         return response
 
     def _check_allowed(self, request: LLMRequest) -> None:
+        if request.purpose is Purpose.CONNECTIVITY_CHECK and not is_fixed_ping(request):
+            # Checked for every provider: this purpose may only ever carry the fixed ping text.
+            raise LLMPrivacyError("the connectivity check accepts only its fixed text")
         if not self.local and (
             request.contains_personal_data or request.purpose not in HOSTED_ALLOWED_PURPOSES
         ):
             raise LLMPrivacyError("this data may not be sent to a hosted provider")
+        if not self.local and request.store is not False:
+            # Leaving retention to the provider's default is only for the fixed ping sentence.
+            if request.purpose is not Purpose.CONNECTIVITY_CHECK:
+                raise LLMPrivacyError("this data may not be sent to a hosted provider")
         if len(request.system) + len(request.user) > MAX_REQUEST_CHARS:
             raise LLMConfigError("request too large")
 

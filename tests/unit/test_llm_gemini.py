@@ -72,6 +72,46 @@ def client_for(server: Server, **overrides: object) -> GeminiClient:
     return GeminiClient(**(options | overrides), transport=server.transport)  # type: ignore[arg-type]
 
 
+# --- the shapes the ping levels use ------------------------------------------------------------
+
+
+async def test_a_plain_request_sends_only_model_input_and_generation_config() -> None:
+    server = json_server(reply())
+    plain = LLMRequest(Purpose.CONNECTIVITY_CHECK, "", "say pong", None, store=None)
+
+    await client_for(server, thinking_level="low").complete(plain)
+
+    assert json.loads(server.requests[0].content) == {
+        "model": "test-model",
+        "input": "say pong",
+        "generation_config": {"max_output_tokens": 1024, "thinking_level": "low"},
+    }
+
+
+async def test_each_optional_field_is_sent_only_when_asked_for() -> None:
+    with_system = LLMRequest(Purpose.CONNECTIVITY_CHECK, "be brief", "say pong", None, store=False)
+    server = json_server(reply())
+
+    await client_for(server).complete(with_system)
+
+    body = json.loads(server.requests[0].content)
+    assert set(body) == {"model", "input", "generation_config", "system_instruction", "store"}
+    assert body["store"] is False
+
+
+@pytest.mark.parametrize(
+    "spelling", ["gemini-3.8-flash", "models/gemini-3.8-flash", "  models/gemini-3.8-flash "]
+)
+async def test_the_model_name_is_sent_in_the_documented_bare_form(spelling: str) -> None:
+    server = json_server(reply())
+    client = client_for(server, model=spelling)
+
+    await client.complete(REQUEST)
+
+    assert client.model == "gemini-3.8-flash"
+    assert json.loads(server.requests[0].content)["model"] == "gemini-3.8-flash"
+
+
 # --- the request ------------------------------------------------------------------------------
 
 

@@ -17,6 +17,17 @@ It builds its own client from the settings (LLM_PROVIDER, LLM_MODEL_EXTRACTION, 
 and turns the kill switch on for this process only: .env is never modified. A run record
 (no post text, no key) is written under .local/, which git ignores.
 
+Connectivity ping: one request that checks the key, endpoint and request shape without any stored
+post. `--ping-level` says how much of a real request is included, so a failure can be narrowed down:
+
+    uv run python -m scripts.try_extraction --ping --ping-level 1 --allow-provider
+      1 = the smallest request: model, a fixed harmless input, generation_config
+      2 = level 1 + system_instruction + store=false
+      3 = level 2 + the JSON-schema response_format with the real extraction prompt and schema,
+          sent with a fixed short fictional job post (never a stored post)
+
+Each level is exactly one request, with the same confirmation question and run record.
+
 Evaluation (stub): `--eval labeled.json` only checks the file's format for now. Format:
 
     {"posts": [{"text": "full post text...",
@@ -55,13 +66,18 @@ from app.extraction.merge import (
 from app.extraction.rules import RuleResult, extract_with_rules
 from app.extraction.schema import ExtractionFormatError, parse_extraction
 from app.llm.base import (
+    PING_INPUT,
+    PING_SYSTEM,
     LLMBadResponse,
     LLMClient,
     LLMConfigError,
     LLMError,
     LLMPrivacyError,
     LLMRateLimited,
+    LLMRequest,
     LLMResponse,
+    LLMUsage,
+    Purpose,
 )
 from app.llm.client import build_client
 from app.llm.prompts import EXTRACT_JOB_V1, build_extraction_request
@@ -73,6 +89,14 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
 RUN_RECORD_DIR = Path(__file__).resolve().parent.parent / ".local" / "extraction-runs"
 MAX_RECORDED_MODEL_CHARS = 4_000
+PING_LEVELS = (1, 2, 3)
+PING_FAKE_POST = """Senior Python Developer (a fictional example, not a real job)
+
+Example Corp is hiring a Senior Python Developer for a fully remote team.
+Stack: Python, Django, PostgreSQL, Docker.
+Salary: $90,000 - $120,000 per year.
+To apply, visit https://example.com/careers/senior-python-developer
+"""
 LOW_SUFFIX = " (low)"  # shown after a rules value that is only a guess
 COVERAGE_FIELDS = (
     "title", "company", "remote_policy", "stack", "apply_email", "apply_url", "salary", "seniority"
@@ -135,12 +159,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--yes", action="store_true", help="skip the confirmation question")
     parser.add_argument("--eval", type=Path, metavar="LABELED.json", help="check a labels file")
+    parser.add_argument(
+        "--ping",
+        action="store_true",
+        help="send ONE fixed, harmless request to check the key, endpoint and request shape",
+    )
+    parser.add_argument(
+        "--ping-level",
+        type=int,
+        choices=PING_LEVELS,
+        help="1 = model+input+generation_config; 2 = +system_instruction+store=false; "
+        "3 = +JSON-schema response_format with a fictional job post (default 1)",
+    )
     return parser
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.ping_level is not None and not args.ping:
+        parser.error("--ping-level only makes sense with --ping")
+    if args.ping:
+        if not args.allow_provider:
+            parser.error("--ping sends a real request: it needs --allow-provider")
+        if args.max_requests is not None or args.eval is not None or args.source_id:
+            parser.error("--ping always makes exactly one request; use it without other options")
+        return args
     if args.allow_provider and args.max_requests is None:
         parser.error("--allow-provider needs --max-requests N")
     if args.max_requests is not None and not args.allow_provider:
@@ -278,6 +322,14 @@ async def run_requests(
     return records
 
 
+def _tokens(usage: LLMUsage) -> dict[str, int | None]:
+    return {
+        "input": usage.input_tokens,
+        "output": usage.output_tokens,
+        "thought": usage.thought_tokens,
+    }
+
+
 def _stop_if_fatal(budget: RequestBudget, error: LLMError) -> None:
     if isinstance(error, LLMRateLimited):
         budget.stop("rate limited (HTTP 429): stopped, nothing retried")
@@ -324,11 +376,7 @@ def _answered(
         latency_ms=latency,
         sent_chars=len(sent),
         truncated=truncated,
-        tokens={
-            "input": usage.input_tokens,
-            "output": usage.output_tokens,
-            "thought": usage.thought_tokens,
-        },
+        tokens=_tokens(usage),
         rules_values=rules_values(post),
         model_text=response.text[:MAX_RECORDED_MODEL_CHARS],
     )
@@ -429,7 +477,7 @@ def settings_summary(settings: Settings) -> str:
     )
 
 
-def print_result(index: int, record: RequestRecord, timeout_seconds: float) -> None:
+def print_result_header(index: int, record: RequestRecord) -> None:
     tokens = record.tokens
     token_text = "tokens n/a"
     if tokens:
@@ -439,6 +487,10 @@ def print_result(index: int, record: RequestRecord, timeout_seconds: float) -> N
         f"\n[{index}] job {record.job_id}: {record.outcome} ({record.reason or 'ok'}), "
         f"{record.latency_ms} ms, {token_text}"
     )
+
+
+def print_result(index: int, record: RequestRecord, timeout_seconds: float) -> None:
+    print_result_header(index, record)
     if record.outcome != "ok":
         if hint := timeout_hint(record, timeout_seconds):
             print(f"    {hint}")
@@ -580,12 +632,18 @@ def load_labels(path: Path) -> LabeledFile:
 
 
 def save_record(
-    directory: Path, *, client: LLMClient, budget: RequestBudget, records: list[RequestRecord]
+    directory: Path,
+    *,
+    client: LLMClient,
+    budget: RequestBudget,
+    records: list[RequestRecord],
+    mode: str = "extraction",
 ) -> Path:
     """A local JSON file with the run: ids, lengths, outcomes, values. No post text, no key."""
     started = datetime.now(UTC)
     payload = {
         "finished_at": started.isoformat(),
+        "mode": mode,
         "provider": client.name,
         "model": client.model,
         "prompt_version": EXTRACT_JOB_V1.version,
@@ -596,6 +654,105 @@ def save_record(
     path = directory / f"{started:%Y%m%dT%H%M%SZ}.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+# --- connectivity ping -------------------------------------------------------------------------
+
+
+def build_ping_request(level: int, *, max_chars: int) -> LLMRequest:
+    """The request for a ping level. Only fixed text is ever used, never a stored post."""
+    if level == 1:
+        return LLMRequest(Purpose.CONNECTIVITY_CHECK, "", PING_INPUT, None, store=None)
+    if level == 2:
+        return LLMRequest(Purpose.CONNECTIVITY_CHECK, PING_SYSTEM, PING_INPUT, None, store=False)
+    return build_extraction_request(PING_FAKE_POST, max_chars=max_chars).request
+
+
+def request_fields(request: LLMRequest, settings: Settings) -> list[str]:
+    """The JSON body fields the Gemini adapter will send for this request (names only)."""
+    config = ["max_output_tokens"] + (["thinking_level"] if settings.gemini_thinking_level else [])
+    fields = ["model", "input", f"generation_config({', '.join(config)})"]
+    if request.system:
+        fields.append("system_instruction")
+    if request.json_schema is not None:
+        fields.append("response_format(json schema)")
+    if request.store is not None:
+        fields.append(f"store={str(request.store).lower()}")
+    return fields
+
+
+async def run_ping(
+    client: LLMClient, request: LLMRequest, level: int, budget: RequestBudget
+) -> RequestRecord:
+    """Exactly one request. At level 3 the answer is also checked against JobExtraction."""
+    label = f"ping-level-{level}"
+    budget.used += 1
+    started = time.perf_counter()
+    try:
+        response = await client.complete(request)
+    except LLMError as error:
+        latency = round((time.perf_counter() - started) * 1000)
+        _stop_if_fatal(budget, error)
+        return RequestRecord(
+            label, _outcome(error), error.reason, latency, len(request.user), False
+        )
+    latency = round((time.perf_counter() - started) * 1000)
+    record = RequestRecord(
+        label, "ok", None, latency, len(request.user), False, tokens=_tokens(response.usage)
+    )
+    record.model_text = response.text[:MAX_RECORDED_MODEL_CHARS]
+    if level == 3:
+        try:
+            extraction = parse_extraction(response.text)
+        except ExtractionFormatError as error:
+            record.validation_error = error.summary
+        else:
+            record.validated = True
+            record.merged_values = {
+                "title": extraction.title or "-",
+                "stack": ", ".join(extraction.stack) or "-",
+                "apply_url": extraction.apply_url or "-",
+            }
+    return record
+
+
+def print_ping_result(record: RequestRecord, level: int, timeout_seconds: float) -> None:
+    print_result_header(1, record)
+    if hint := timeout_hint(record, timeout_seconds):
+        print(f"    {hint}")
+    if record.outcome != "ok":
+        return
+    print(f"    reply: {' '.join((record.model_text or '').split())[:300]}")
+    if level == 3:
+        verdict = "yes" if record.validated else f"NO ({record.validation_error})"
+        print(f"    validated against JobExtraction: {verdict}")
+        for name, value in record.merged_values.items():
+            print(f"      {name}: {value}")
+
+
+def run_ping_command(args: argparse.Namespace, settings: Settings) -> int:
+    level = args.ping_level or 1
+    client = make_client(settings)
+    request = build_ping_request(level, max_chars=settings.llm_max_input_chars)
+    print()
+    print(f"About to send 1 ping request (level {level}) to {client.name} / {client.model}:")
+    print(f"  body fields: {', '.join(request_fields(request, settings))}")
+    print(f"  {settings_summary(settings)}")
+    print("  fixed input (no stored post):")
+    for line in request.user.splitlines():
+        print(f"    | {line}")
+    if not args.yes and not confirm("Send this request?"):
+        print("Cancelled. Nothing was sent.")
+        return 0
+    budget = RequestBudget(1)
+    record = asyncio.run(run_ping(client, request, level, budget))
+    print_ping_result(record, level, settings.llm_request_timeout_seconds)
+    path = save_record(
+        RUN_RECORD_DIR, client=client, budget=budget, records=[record], mode=f"ping level {level}"
+    )
+    print()
+    print(f"Run record: {path}")
+    return 0
 
 
 # --- the command -------------------------------------------------------------------------------
@@ -609,6 +766,8 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     settings = get_settings()
+    if args.ping:
+        return run_ping_command(args, settings)  # needs no database
     target = database_target(settings.database_url)  # refuses the wrong database up front
     client = make_client(settings) if args.allow_provider else None  # fail before reading
     print(f"Reading (read-only) from database {target}")

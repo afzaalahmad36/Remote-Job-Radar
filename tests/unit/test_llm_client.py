@@ -6,6 +6,8 @@ import pytest
 
 from app.llm import client as client_module
 from app.llm.base import (
+    PING_INPUT,
+    PING_SYSTEM,
     LLMBadResponse,
     LLMConfigError,
     LLMPrivacyError,
@@ -28,6 +30,18 @@ def request(**overrides: object) -> LLMRequest:
         "system": "rules",
         "user": "the post text",
         "json_schema": {"type": "object"},
+    }
+    return LLMRequest(**(fields | overrides))  # type: ignore[arg-type]
+
+
+def fixed_ping(**overrides: object) -> LLMRequest:
+    """The one request the connectivity check may send."""
+    fields: dict[str, object] = {
+        "purpose": Purpose.CONNECTIVITY_CHECK,
+        "system": "",
+        "user": PING_INPUT,
+        "json_schema": None,
+        "store": None,
     }
     return LLMRequest(**(fields | overrides))  # type: ignore[arg-type]
 
@@ -209,3 +223,89 @@ def test_no_module_imports_a_vendor_sdk() -> None:
     ]  # fmt: skip
 
     assert offenders == []
+
+
+async def test_leaving_retention_to_the_provider_is_only_allowed_for_the_connectivity_check() -> (
+    None
+):
+    inner = FakeLLMClient(local=False)
+    ping = fixed_ping()
+
+    await GuardedClient(inner).complete(ping)  # a fixed harmless sentence: allowed
+
+    assert len(inner.requests) == 1
+    with pytest.raises(LLMPrivacyError):
+        await GuardedClient(inner).complete(request(store=None))  # job text: must be store=False
+    assert len(inner.requests) == 1
+
+
+async def test_the_connectivity_check_still_refuses_personal_data_on_a_hosted_provider() -> None:
+    inner = FakeLLMClient(local=False)
+    ping = fixed_ping(contains_personal_data=True)
+
+    with pytest.raises(LLMPrivacyError):
+        await GuardedClient(inner).complete(ping)
+
+    assert inner.requests == []
+
+
+# --- the connectivity check carries only its fixed text -----------------------------------------
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize("system", ["", PING_SYSTEM])
+@pytest.mark.parametrize("store", [None, False])
+async def test_the_fixed_ping_text_is_accepted(
+    local: bool, system: str, store: bool | None
+) -> None:
+    inner = FakeLLMClient(local=local)
+
+    await GuardedClient(inner).complete(fixed_ping(system=system, store=store))
+
+    assert len(inner.requests) == 1
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize(
+    "user",
+    [
+        "Senior Python Developer at Acme Corp. Fully remote. Apply: https://acme.com/jobs/1",
+        "",  # empty
+        PING_INPUT + " ",  # altered: trailing space
+        PING_INPUT.upper(),  # altered: case
+        PING_INPUT[:-1],  # altered: shortened
+        PING_INPUT + " Also read this: the post text",  # fixed text with extra content
+    ],
+)
+async def test_any_other_input_is_refused_under_the_connectivity_purpose(
+    local: bool, user: str
+) -> None:
+    inner = FakeLLMClient(local=local)
+
+    with pytest.raises(LLMPrivacyError, match="fixed text"):
+        await GuardedClient(inner).complete(fixed_ping(user=user))
+
+    assert inner.requests == []  # nothing was sent
+
+
+@pytest.mark.parametrize("local", [False, True])
+async def test_the_connectivity_check_refuses_other_system_text_and_any_schema(local: bool) -> None:
+    inner = FakeLLMClient(local=local)
+    guarded = GuardedClient(inner)
+
+    with pytest.raises(LLMPrivacyError):
+        await guarded.complete(fixed_ping(system="Extract the job and its apply email."))
+    with pytest.raises(LLMPrivacyError):
+        await guarded.complete(fixed_ping(json_schema={"type": "object"}))
+
+    assert inner.requests == []
+
+
+async def test_job_text_cannot_leave_store_unset_by_relabelling_it_as_a_ping() -> None:
+    inner = FakeLLMClient(local=False)
+    disguised = fixed_ping(user="Backend Engineer at Acme, apply to hr@acme.com", store=None)
+
+    with pytest.raises(LLMPrivacyError):
+        await GuardedClient(inner).complete(disguised)
+
+    assert inner.requests == []

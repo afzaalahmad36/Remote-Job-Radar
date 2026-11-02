@@ -13,21 +13,31 @@ class Purpose(StrEnum):
     """Why a request is made. Each purpose says what kind of data its text may contain."""
 
     JOB_POST_EXTRACTION = "job_post_extraction"  # public job post text, contact details removed
+    CONNECTIVITY_CHECK = "connectivity_check"  # a fixed harmless sentence, never stored data
 
 
 # Hosted providers (a free tier may use what it is sent to improve products, and people may read
 # it) accept only these. Anything touching a CV or other personal data is never listed here: it
 # may only go to a provider running on your own machine.
-HOSTED_ALLOWED_PURPOSES = frozenset({Purpose.JOB_POST_EXTRACTION})
+HOSTED_ALLOWED_PURPOSES = frozenset({Purpose.JOB_POST_EXTRACTION, Purpose.CONNECTIVITY_CHECK})
+
+
+# The only text the connectivity check may carry. GuardedClient compares against these exactly, so
+# job text can never travel under that purpose (which is the one allowed to leave `store` unset).
+PING_INPUT = "Reply with the single word: pong"
+PING_SYSTEM = "You are a connectivity check. Answer with the single word the user asks for."
 
 
 @dataclass(frozen=True)
 class LLMRequest:
     purpose: Purpose
-    system: str
+    system: str  # "" sends no system instruction
     user: str
-    json_schema: dict[str, Any]
+    json_schema: dict[str, Any] | None  # None asks for plain text instead of JSON
     contains_personal_data: bool = False
+    # False asks the provider not to keep the interaction. None leaves the provider's default and
+    # is only allowed for the connectivity check (see GuardedClient).
+    store: bool | None = False
 
 
 @dataclass(frozen=True)
@@ -44,6 +54,16 @@ class LLMResponse:
     text: str  # the model's JSON text; untrusted until validated
     usage: LLMUsage = field(default_factory=LLMUsage)
     request_id: str | None = None
+
+
+def is_fixed_ping(request: LLMRequest) -> bool:
+    """True for exactly the fixed ping: its input, no system text or its own, and no schema."""
+    return (
+        request.user == PING_INPUT
+        and request.system in ("", PING_SYSTEM)
+        and request.json_schema is None
+        and not request.contains_personal_data
+    )
 
 
 class LLMClient(Protocol):
