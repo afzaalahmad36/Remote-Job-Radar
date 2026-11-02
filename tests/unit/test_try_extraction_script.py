@@ -26,6 +26,8 @@ from scripts.try_extraction import (
     run_requests,
     save_record,
     select_candidates,
+    settings_summary,
+    timeout_hint,
 )
 from tests.settings_helpers import settings_with
 
@@ -300,3 +302,45 @@ async def test_a_database_without_a_jobs_table_is_refused() -> None:
         await ensure_jobs_table(StubConnection(None))  # type: ignore[arg-type]
 
     await ensure_jobs_table(StubConnection("jobs"))  # type: ignore[arg-type]
+
+
+# --- explaining a timeout ----------------------------------------------------------------------
+
+
+async def test_a_response_timeout_says_how_long_it_waited_and_that_it_may_have_counted() -> None:
+    client = FakeLLMClient([LLMTransientError("no response in time")])
+
+    [record] = await run_requests(client, [post()], RequestBudget(1), max_chars=12_000)
+    record.latency_ms = 25_400
+
+    hint = timeout_hint(record, 25.0)
+
+    assert hint is not None
+    assert "waited 25.4 s of the 25 s limit" in hint and "may still have counted" in hint
+
+
+async def test_a_connect_timeout_says_nothing_reached_the_provider() -> None:
+    client = FakeLLMClient([LLMTransientError("connect timeout")])
+
+    [record] = await run_requests(client, [post()], RequestBudget(1), max_chars=12_000)
+
+    hint = timeout_hint(record, 25.0)
+
+    assert hint is not None and "never made" in hint
+
+
+async def test_other_failures_and_successes_get_no_timeout_hint() -> None:
+    client = FakeLLMClient([LLMTransientError("server error 503"), DEFAULT_RESPONSE])
+
+    records = await run_requests(client, [post(), post()], RequestBudget(2), max_chars=12_000)
+
+    assert [timeout_hint(record, 25.0) for record in records] == [None, None]
+
+
+def test_the_settings_summary_shows_the_thinking_level_timeout_and_output_budget() -> None:
+    summary = settings_summary(settings_with(llm_request_timeout_seconds=25))
+
+    assert "thinking level: low" in summary
+    assert "request timeout: 25 s" in summary
+    assert "max output tokens: 2048" in summary
+    assert "model default" in settings_summary(settings_with(gemini_thinking_level=""))

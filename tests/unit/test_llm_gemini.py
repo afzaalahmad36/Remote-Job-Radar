@@ -257,8 +257,9 @@ async def test_a_redirect_is_refused_and_never_followed() -> None:
 @pytest.mark.parametrize(
     ("raised", "reason"),
     [
-        (httpx.ReadTimeout("slow"), "timeout"),
-        (httpx.ConnectTimeout("slow"), "timeout"),
+        (httpx.ReadTimeout("slow"), "no response in time"),
+        (httpx.WriteTimeout("slow"), "no response in time"),
+        (httpx.ConnectTimeout("slow"), "connect timeout"),
         (httpx.ConnectError("down"), "connection failed"),
         (httpx.RemoteProtocolError("garbled"), "connection failed"),
     ],

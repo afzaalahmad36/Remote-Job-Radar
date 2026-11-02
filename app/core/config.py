@@ -55,14 +55,19 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     # The public endpoint; a setting only so the host is not hard-coded in the adapter.
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
-    # "" leaves the field out of the request. Not every model accepts every level.
-    gemini_thinking_level: Literal["", "minimal", "low", "medium", "high"] = ""
+    # How much the model "thinks" before answering; more thinking is slower. "" leaves the field
+    # out (the model's own default, which is medium on gemini-3.8-flash and made the first real
+    # request time out). gemini-3.8-flash accepts low | medium | high and rejects "minimal", so
+    # that value is not allowed here: a bad value fails at startup, not at the first request.
+    gemini_thinking_level: Literal["", "low", "medium", "high"] = "low"
     # Timeout of ONE provider request. The cap keeps a whole extraction (at most two requests)
     # inside the Celery time limits: see app/extraction/limits.py.
     llm_request_timeout_seconds: float = Field(
         default=20.0, gt=0, le=MAX_LLM_REQUEST_TIMEOUT_SECONDS
     )
-    llm_max_output_tokens: int = Field(default=1024, ge=256, le=8192)
+    # Includes the model's thinking tokens: too small a value cuts the answer off (status
+    # "incomplete") even when the JSON itself is short.
+    llm_max_output_tokens: int = Field(default=2048, ge=256, le=8192)
     # Characters of a post sent to a provider (longer posts keep their start and end).
     llm_max_input_chars: int = Field(default=12_000, ge=1_000, le=20_000)
     # A post shorter than this is not sent to a provider: it is a headline or a stub, and a model
