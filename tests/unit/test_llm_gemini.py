@@ -10,6 +10,7 @@ from app.llm.base import (
     LLMBadResponse,
     LLMConfigError,
     LLMRateLimited,
+    LLMRejected,
     LLMRequest,
     LLMTransientError,
     Purpose,
@@ -279,8 +280,11 @@ async def test_timeouts_and_server_errors_are_transient(status: int) -> None:
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
 async def test_client_errors_are_config_errors_that_retrying_cannot_fix(status: int) -> None:
-    with pytest.raises(LLMConfigError):
+    with pytest.raises(LLMConfigError) as error:
         await client_for(json_server({}, status=status)).complete(REQUEST)
+
+    assert isinstance(error.value, LLMRejected) and error.value.status_code == status
+    assert str(error.value) == f"request rejected ({status})"  # a number, never provider text
 
 
 async def test_a_redirect_is_refused_and_never_followed() -> None:

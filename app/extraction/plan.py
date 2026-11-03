@@ -28,6 +28,10 @@ class ExtractionError(StrEnum):
 
     TOO_SHORT = "post too short for the model"
     MODEL_NOT_ENABLED = "no title found; the model is not enabled"
+    NO_TITLE = "no title found"  # the model was asked too, and there is still none
+    INVALID_REPLY = "model reply was not valid"  # failed validation twice
+    REFUSED_LOCALLY = "request refused locally"  # our own privacy or size guard said no
+    REJECTED = "model request was rejected"  # the provider refused it (key, model, request)
     UNEXPECTED = "unexpected error"
 
 
@@ -57,6 +61,17 @@ def plan_rules_phase(text: str, *, can_enrich: bool, min_chars: int) -> RulesPla
         enrichment=enrichment,
         error=error,
     )
+
+
+def model_result_state(
+    values: MergedExtraction,
+) -> tuple[ExtractionStatus, ExtractionError | None]:
+    """The status after a valid model answer was merged: a verdict, a usable job, or a failure."""
+    if not values.is_job_posting:
+        return ExtractionStatus.NOT_A_JOB, None
+    if values.title is None:
+        return ExtractionStatus.EXTRACTION_FAILED, ExtractionError.NO_TITLE
+    return ExtractionStatus.EXTRACTED, None
 
 
 def failed_plan(text: str) -> RulesPlan:

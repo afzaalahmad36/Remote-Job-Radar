@@ -21,6 +21,7 @@ from app.llm.base import (
     LLMBadResponse,
     LLMConfigError,
     LLMRateLimited,
+    LLMRejected,
     LLMRequest,
     LLMResponse,
     LLMTransientError,
@@ -129,7 +130,7 @@ def _raise_for_status(response: httpx.Response) -> None:
         raise LLMConfigError("unexpected redirect")
     if status >= 400:
         # The body is not read or kept: provider error messages can repeat what we sent.
-        raise LLMConfigError(f"request rejected ({status})")
+        raise LLMRejected(status)
 
 
 def _retry_after(response: httpx.Response) -> float | None:

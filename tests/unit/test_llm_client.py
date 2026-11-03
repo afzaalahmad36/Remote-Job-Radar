@@ -309,3 +309,23 @@ async def test_job_text_cannot_leave_store_unset_by_relabelling_it_as_a_ping() -
         await GuardedClient(inner).complete(disguised)
 
     assert inner.requests == []
+
+
+async def test_errors_raised_by_the_guard_say_the_request_never_left() -> None:
+    inner = FakeLLMClient(local=False)
+
+    with pytest.raises(LLMPrivacyError) as privacy:
+        await GuardedClient(inner).complete(request(contains_personal_data=True))
+    with pytest.raises(LLMConfigError) as too_large:
+        await GuardedClient(inner).complete(request(user="x" * (MAX_REQUEST_CHARS + 1)))
+
+    assert privacy.value.never_sent is True and too_large.value.never_sent is True
+    assert inner.requests == []
+
+
+async def test_errors_from_the_provider_do_not_claim_the_request_never_left() -> None:
+    for error in (LLMRateLimited(5), LLMTransientError("timeout"), LLMConfigError("rejected")):
+        with pytest.raises(type(error)) as raised:
+            await GuardedClient(FakeLLMClient([error])).complete(request())
+
+        assert raised.value.never_sent is False

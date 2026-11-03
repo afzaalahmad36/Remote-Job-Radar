@@ -79,9 +79,12 @@ class LLMClient(Protocol):
 class LLMError(Exception):
     """Base of every LLM failure. `reason` is a short fixed phrase: safe to log and to store."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, never_sent: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
+        # True when the request was refused inside this process, before anything was sent. The
+        # caller uses it to tell "the provider may have counted this" from "it never left".
+        self.never_sent = never_sent
 
 
 class LLMTransientError(LLMError):
@@ -100,9 +103,21 @@ class LLMConfigError(LLMError):
     """Retrying cannot help: bad key, unknown model, rejected request, unsupported provider."""
 
 
+class LLMRejected(LLMConfigError):
+    """The provider answered with an HTTP 4xx status (other than 429). The status is a number from
+    the protocol, not provider text, so it is safe to log and to branch on."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"request rejected ({status_code})")
+        self.status_code = status_code
+
+
 class LLMBadResponse(LLMError):
     """The provider answered, but not with usable output (empty, truncated, malformed)."""
 
 
 class LLMPrivacyError(LLMError):
     """The request would send data to a provider that is not allowed to receive it."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason, never_sent=True)  # always refused locally

@@ -74,10 +74,12 @@ class Settings(BaseSettings):
     # cannot invent what the text does not say. 0 turns the gate off. 500 is based on 55 real
     # posts: every stub was 172-268 characters, every real post at least 1,945.
     llm_min_post_chars: int = Field(default=500, ge=0, le=5_000)
-    # Budgets counted in provider REQUESTS, sized for a free tier. Check your own limits in the
-    # provider's console and raise these deliberately; the defaults are small on purpose.
-    llm_daily_request_cap_per_user: int = Field(default=25, ge=0)
-    llm_daily_request_cap_global: int = Field(default=50, ge=0)
+    # Budgets counted in provider REQUESTS, sized for a free tier. Limits depend on the model and
+    # on the project, so read your own in the provider's console and change these deliberately;
+    # nothing here is tied to one model. For reference, gemini-3.5-flash-lite showed 15 requests
+    # per minute and 500 per day on the free tier; the defaults stay well below that.
+    llm_daily_request_cap_per_user: int = Field(default=100, ge=0)
+    llm_daily_request_cap_global: int = Field(default=150, ge=0)
     llm_requests_per_minute: int = Field(default=5, ge=1)
     # After this many days a job that still waits for the LLM keeps its rules data and is skipped.
     llm_enrichment_give_up_days: int = Field(default=7, ge=1)

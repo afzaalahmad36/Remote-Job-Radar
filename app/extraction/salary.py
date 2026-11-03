@@ -53,6 +53,13 @@ _PERIOD_WORDS: dict[SalaryPeriod, re.Pattern[str]] = {
         r"\bper\s+hour\b|/\s?(?:hr|hour)\b|\ban\s+hour\b|\bhourly\b|\bp/h\b", re.IGNORECASE
     ),
 }
+
+
+def period_is_stated(text: str, period: SalaryPeriod) -> bool:
+    """True if the text says the period in words a salary uses (per year, /mo, hourly, ...)."""
+    return _PERIOD_WORDS[period].search(text) is not None
+
+
 _SALARY_WORDS = re.compile(
     r"salary|compensation|\bpay\b|\brate\b|remuneration|\bearn|package|\bctc\b|stipend|\bbudget\b",
     re.IGNORECASE,

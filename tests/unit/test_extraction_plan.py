@@ -1,7 +1,16 @@
 import pytest
 
-from app.extraction.plan import ExtractionError, failed_plan, plan_rules_phase
+from app.extraction.merge import MergedExtraction, merge
+from app.extraction.plan import (
+    ExtractionError,
+    failed_plan,
+    model_result_state,
+    plan_rules_phase,
+)
+from app.extraction.rules import RuleResult
+from app.extraction.schema import JobExtraction
 from app.extraction.text_hash import raw_text_hash
+from app.extraction.types import Confidence, Found
 from app.models import ExtractionStatus, LlmEnrichment
 
 MIN_CHARS = 500
@@ -104,6 +113,31 @@ def test_stored_error_texts_are_a_small_fixed_set_that_fits_the_column() -> None
     assert {error.value for error in ExtractionError} == {
         "post too short for the model",
         "no title found; the model is not enabled",
+        "no title found",
+        "model reply was not valid",
+        "request refused locally",
+        "model request was rejected",
         "unexpected error",
     }
     assert all(len(error.value) <= 500 for error in ExtractionError)
+
+
+def merged(rules: RuleResult, **model_fields: object) -> MergedExtraction:
+    answer = JobExtraction.model_validate({"is_job_posting": True, **model_fields})
+    return merge(rules, answer, "text")
+
+
+def test_the_state_after_a_model_answer() -> None:
+    titled = RuleResult(title=Found("Engineer", Confidence.HIGH))
+
+    assert model_result_state(merged(titled)) == (EXTRACTED, None)
+    assert model_result_state(merged(RuleResult(), title="Engineer")) == (EXTRACTED, None)
+    assert model_result_state(merged(RuleResult())) == (FAILED, ExtractionError.NO_TITLE)
+    assert model_result_state(merged(titled, is_job_posting=False)) == (
+        ExtractionStatus.NOT_A_JOB,
+        None,
+    )
+    assert model_result_state(merged(RuleResult(), is_job_posting=False)) == (
+        ExtractionStatus.NOT_A_JOB,
+        None,
+    )

@@ -12,7 +12,9 @@ others are only safety nets:
 
 from app.core.config import MAX_LLM_REQUEST_TIMEOUT_SECONDS
 
-# One request, plus either a retry after a timeout/5xx or the one retry after invalid output.
+# The most provider requests one run makes: the first, and the one corrective retry after an
+# answer that failed validation. A timeout, a 5xx and a 429 are never retried inside the run: the
+# job stays pending behind a shared cooldown and a later run tries again.
 MAX_REQUESTS_PER_JOB = 2
 # Room for the pause before a retry, the rules and the database writes.
 DEADLINE_MARGIN_SECONDS = 5.0

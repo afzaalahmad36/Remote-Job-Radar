@@ -81,7 +81,7 @@ class GuardedClient:
             if request.purpose is not Purpose.CONNECTIVITY_CHECK:
                 raise LLMPrivacyError("this data may not be sent to a hosted provider")
         if len(request.system) + len(request.user) > MAX_REQUEST_CHARS:
-            raise LLMConfigError("request too large")
+            raise LLMConfigError("request too large", never_sent=True)
 
     def _log(
         self,
