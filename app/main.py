@@ -39,6 +39,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.sync_rate_limiter = RateLimiter(
         settings.sync_rate_limit_attempts, settings.sync_rate_limit_window_seconds
     )
+    # Retrying an extraction is limited like a sync (the same numbers) but counted separately.
+    app.state.extract_rate_limiter = RateLimiter(
+        settings.sync_rate_limit_attempts, settings.sync_rate_limit_window_seconds
+    )
     app.include_router(health.router, prefix=API_V1_PREFIX)
     app.include_router(auth.router, prefix=API_V1_PREFIX)
     app.include_router(users.router, prefix=API_V1_PREFIX)

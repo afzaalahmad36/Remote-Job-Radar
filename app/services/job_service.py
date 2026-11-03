@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.models import Job, Source
 from app.schemas.pagination import PageParams
 
@@ -32,3 +33,16 @@ async def list_jobs(
         .offset(page.offset)
     )
     return list(rows), total or 0
+
+
+async def get_owned_job(session: AsyncSession, user_id: uuid.UUID, job_id: uuid.UUID) -> Job:
+    """The job, if it belongs to the user through its source. Someone else's job and a job that
+    does not exist look the same on purpose (404 for both), so ids cannot be probed."""
+    job = await session.scalar(
+        select(Job)
+        .join(Source, Source.id == Job.source_id)
+        .where(Job.id == job_id, Source.user_id == user_id)
+    )
+    if job is None:
+        raise NotFoundError("Job not found")
+    return job

@@ -121,6 +121,27 @@ async def reserve(
     return Reservation(entry.id)
 
 
+async def places_left(
+    session: AsyncSession, settings: Settings, now: datetime | None = None
+) -> int:
+    """How many more requests the global limits (24 h cap and per-minute throttle) allow right
+    now, never below 0. A read only: it reserves nothing, so it is a hint for the sweep, not a
+    promise; `reserve` is what actually decides."""
+    now = now or datetime.now(UTC)
+    places: list[int] = []
+    for window, limit in (
+        (DAY, settings.llm_daily_request_cap_global),
+        (MINUTE, settings.llm_requests_per_minute),
+    ):
+        used = await session.scalar(
+            select(func.count())
+            .select_from(LlmUsageEntry)
+            .where(LlmUsageEntry.created_at > now - window)
+        )
+        places.append(max(limit - (used or 0), 0))
+    return min(places)
+
+
 async def finalize(
     session: AsyncSession,
     reservation: Reservation,

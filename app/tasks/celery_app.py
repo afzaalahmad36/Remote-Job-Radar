@@ -13,6 +13,9 @@ SOFT_TIME_LIMIT_SECONDS = 60
 HARD_TIME_LIMIT_SECONDS = 90
 
 PURGE_AT_UTC = {"hour": 3, "minute": 17}  # daily, at a quiet time
+# How often the extraction sweep runs. A constant, not a setting: it is a safety net (it picks up
+# jobs whose task was lost and gives up on old ones), not something to tune per deployment.
+SWEEP_INTERVAL_SECONDS = 300
 
 # How long we wait on Redis before giving up, for the broker and for the lock client alike. Short,
 # so a Redis outage shows up as a quick 503 from the API instead of requests hanging; the worker
@@ -71,6 +74,12 @@ def build_config(settings: Settings) -> dict[str, Any]:
                 # If the workers were down for a while, don't replay the missed runs when they
                 # come back: a run that is older than one interval is stale.
                 "options": {"expires": ingest_interval},
+            },
+            "sweep-extraction": {
+                "task": "sweep_extraction",
+                "schedule": float(SWEEP_INTERVAL_SECONDS),
+                # A sweep that waited longer than one interval is stale: the next one is due.
+                "options": {"expires": SWEEP_INTERVAL_SECONDS},
             },
             "purge-expired-refresh-tokens": {
                 "task": "purge_expired_refresh_tokens",

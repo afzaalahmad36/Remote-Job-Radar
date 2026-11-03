@@ -18,12 +18,19 @@ from app.tasks.celery_app import (
     REDIS_CONNECT_TIMEOUT_SECONDS,
     REDIS_SOCKET_TIMEOUT_SECONDS,
     SOFT_TIME_LIMIT_SECONDS,
+    SWEEP_INTERVAL_SECONDS,
     build_config,
     celery_app,
 )
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-EXPECTED_TASKS = {"ingest_source", "ingest_all_active_sources", "purge_expired_refresh_tokens"}
+EXPECTED_TASKS = {
+    "ingest_source",
+    "ingest_all_active_sources",
+    "purge_expired_refresh_tokens",
+    "extract_job",
+    "sweep_extraction",
+}
 
 
 def settings_with(**overrides: object) -> Settings:
@@ -158,12 +165,28 @@ def test_the_api_deadline_for_one_queue_call_is_a_few_seconds() -> None:
 # --- the beat schedule ---------------------------------------------------------------------------
 
 
-def test_the_schedule_has_the_two_jobs_with_their_task_names() -> None:
+def test_the_schedule_has_the_three_jobs_with_their_task_names() -> None:
     entries = build_config(settings_with())["beat_schedule"]
 
-    assert set(entries) == {"ingest-all-active-sources", "purge-expired-refresh-tokens"}
+    assert set(entries) == {
+        "ingest-all-active-sources",
+        "purge-expired-refresh-tokens",
+        "sweep-extraction",
+    }
     assert entries["ingest-all-active-sources"]["task"] == "ingest_all_active_sources"
     assert entries["purge-expired-refresh-tokens"]["task"] == "purge_expired_refresh_tokens"
+    assert entries["sweep-extraction"]["task"] == "sweep_extraction"
+
+
+def test_the_extraction_sweep_runs_every_five_minutes_whatever_the_settings() -> None:
+    for minutes in (5, 30, 90):  # not tied to the ingest interval, and not a setting
+        entry = build_config(settings_with(ingest_interval_minutes=minutes))["beat_schedule"][
+            "sweep-extraction"
+        ]
+
+        assert entry["schedule"] == 300.0
+        assert entry["options"]["expires"] == 300  # a sweep that waited a whole interval is stale
+    assert SWEEP_INTERVAL_SECONDS == 300
 
 
 @pytest.mark.parametrize(("minutes", "seconds"), [(30, 1800.0), (5, 300.0), (90, 5400.0)])

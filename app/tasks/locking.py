@@ -1,12 +1,13 @@
 import logging
 import uuid
 from functools import lru_cache
-from typing import Protocol
+from typing import Protocol, Self
 
 from redis import Redis
 from redis.exceptions import LockError
 from redis.lock import Lock
 
+from app.extraction.limits import JOB_LOCK_TTL_SECONDS
 from app.tasks.celery_app import (
     HARD_TIME_LIMIT_SECONDS,
     REDIS_CONNECT_TIMEOUT_SECONDS,
@@ -16,6 +17,7 @@ from app.tasks.celery_app import (
 logger = logging.getLogger(__name__)
 
 LOCK_KEY_PREFIX = "lock:ingest:"
+JOB_LOCK_KEY_PREFIX = "lock:extract:"
 # Longer than the hard time limit: a task that is still running is always killed before its lock
 # can expire, so a live run never loses its lock. The extra 30 s is margin for clock/scheduling.
 LOCK_TTL_SECONDS = HARD_TIME_LIMIT_SECONDS + 30
@@ -55,6 +57,9 @@ class RedisSourceLocks:
         never runs unprotected.
     """
 
+    _prefix = LOCK_KEY_PREFIX
+    _ttl = LOCK_TTL_SECONDS
+
     def __init__(self, client: Redis) -> None:
         self._client = client
         self._held: dict[uuid.UUID, Lock] = {}  # the locks this object acquired
@@ -65,14 +70,14 @@ class RedisSourceLocks:
         url: str,
         connect_timeout: float = REDIS_CONNECT_TIMEOUT_SECONDS,
         timeout: float = REDIS_SOCKET_TIMEOUT_SECONDS,
-    ) -> "RedisSourceLocks":
+    ) -> Self:
         # Timeouts, so a dead or hung Redis cannot hold a worker or an API request forever.
         return cls(
             Redis.from_url(url, socket_connect_timeout=connect_timeout, socket_timeout=timeout)
         )
 
     def acquire(self, source_id: uuid.UUID) -> bool:
-        lock = self._client.lock(lock_key(source_id), timeout=LOCK_TTL_SECONDS, blocking=False)
+        lock = self._client.lock(self._key(source_id), timeout=self._ttl, blocking=False)
         if not lock.acquire(blocking=False):
             return False
         self._held[source_id] = lock
@@ -88,7 +93,28 @@ class RedisSourceLocks:
             logger.warning("Lock for source %s expired before it was released", source_id)
 
     def is_locked(self, source_id: uuid.UUID) -> bool:
-        return bool(self._client.exists(lock_key(source_id)))
+        return bool(self._client.exists(self._key(source_id)))
+
+    def _key(self, owner_id: uuid.UUID) -> str:
+        return f"{self._prefix}{owner_id}"
+
+
+class RedisJobLocks(RedisSourceLocks):
+    """One lock per job, so two runs of one job's extraction do not both ask the model.
+
+    Only an optimisation: the compare-and-set writes keep the data correct even if two runs
+    overlap (for example after a lock expired). Same behaviour as the source locks, including the
+    expiry that frees the lock of a worker that was killed; the TTL outlives the hard task limit.
+    """
+
+    _prefix = JOB_LOCK_KEY_PREFIX
+    _ttl = JOB_LOCK_TTL_SECONDS
+
+
+@lru_cache
+def redis_job_locks_for(redis_url: str) -> RedisJobLocks:
+    """One job-lock client per process, like `redis_locks_for`."""
+    return RedisJobLocks.from_url(redis_url)
 
 
 @lru_cache

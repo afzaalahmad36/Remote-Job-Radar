@@ -56,6 +56,18 @@ class DuplicateSourceError(ConflictError):
     code = "duplicate_source"
 
 
+class NotRetryableError(ConflictError):
+    """The job is not in a state a retry can change (it is not failed and not skipped)."""
+
+    code = "not_retryable"
+
+
+class RetriesExhaustedError(ConflictError):
+    """The job has already been retried as often as allowed."""
+
+    code = "retries_exhausted"
+
+
 class QueueUnavailableError(DomainError):
     """The background-job system (Redis) cannot be reached right now."""
 

@@ -6,7 +6,7 @@ from redis.exceptions import RedisError
 
 from app.core.exceptions import QueueUnavailableError
 from app.tasks.celery_app import QUEUE_CALL_TIMEOUT_SECONDS
-from app.tasks.jobs import ingest_source
+from app.tasks.jobs import extract_job, ingest_source
 from app.tasks.locking import SourceLocks
 
 
@@ -25,9 +25,13 @@ class CeleryTaskQueue:
     """
 
     def __init__(
-        self, locks: SourceLocks, call_timeout: float = QUEUE_CALL_TIMEOUT_SECONDS
+        self,
+        locks: SourceLocks,
+        call_timeout: float = QUEUE_CALL_TIMEOUT_SECONDS,
+        job_locks: SourceLocks | None = None,
     ) -> None:
         self._locks = locks
+        self._job_locks = job_locks  # only needed for the extraction methods below
         self._call_timeout = call_timeout
 
     async def is_syncing(self, source_id: uuid.UUID) -> bool:
@@ -46,3 +50,21 @@ class CeleryTaskQueue:
             )
         except (KombuError, RedisError, TimeoutError) as error:  # the broker is unreachable
             raise QueueUnavailableError("The sync queue is unavailable") from error
+
+    async def is_extracting(self, job_id: uuid.UUID) -> bool:
+        assert self._job_locks is not None, "this queue was built without job locks"
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._job_locks.is_locked, job_id), self._call_timeout
+            )
+        except (RedisError, TimeoutError) as error:
+            raise QueueUnavailableError("The extraction queue is unavailable") from error
+
+    async def enqueue_extraction(self, job_id: uuid.UUID, countdown: float = 0.0) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(extract_job.apply_async, args=[str(job_id)], countdown=countdown),
+                self._call_timeout,
+            )
+        except (KombuError, RedisError, TimeoutError) as error:
+            raise QueueUnavailableError("The extraction queue is unavailable") from error

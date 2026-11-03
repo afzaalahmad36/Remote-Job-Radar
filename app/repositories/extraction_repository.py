@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, case, or_, select, update
+from sqlalchemy import ColumnElement, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.extraction.merge import MergedExtraction
@@ -27,6 +27,7 @@ from app.models import (
     ExtractionStatus,
     Job,
     LlmEnrichment,
+    LlmUsageEntry,
     RemotePolicy,
     SalaryPeriod,
     Seniority,
@@ -254,6 +255,110 @@ async def write_skipped(
         },
         bump_attempts=False,
     )
+
+
+async def reset_for_retry(
+    session: AsyncSession, *, user_id: uuid.UUID, job_id: uuid.UUID, max_retries: int
+) -> int | None:
+    """Put a failed or skipped job back at the start, and use one of its retries.
+
+    This is the only place that sets `extraction_method` back to NULL, which is what makes the
+    sweep (and the task the caller queues) treat the job as "rules phase not run". The WHERE
+    clause is the whole decision, so two clicks at once use one retry: the job must belong to the
+    user, be failed or skipped, and have retries left. Returns the new retry count, or None if
+    the job did not qualify (the caller then looks again to say why).
+    """
+    owned_sources = select(Source.id).where(Source.user_id == user_id)
+    statement = (
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.source_id.in_(owned_sources),
+            Job.extraction_retries < max_retries,
+            or_(
+                Job.extraction_status == ExtractionStatus.EXTRACTION_FAILED,
+                Job.llm_enrichment == LlmEnrichment.SKIPPED,
+            ),
+        )
+        .values(
+            extraction_status=ExtractionStatus.PENDING,
+            llm_enrichment=LlmEnrichment.NOT_NEEDED,
+            extraction_error=None,
+            extraction_method=None,
+            extraction_retries=Job.extraction_retries + 1,
+        )
+        .returning(Job.extraction_retries)
+    )
+    return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def give_up_waiting(session: AsyncSession, *, older_than: datetime) -> int:
+    """Stop waiting for the model for jobs that have waited since before `older_than`.
+
+    One set-based UPDATE. The rules' data stays; a job that still has no title becomes failed,
+    because nothing is left that could give it one. A worker finishing the same job at the same
+    moment either wins (then this row no longer matches) or loses its compare-and-set.
+    """
+    statement = (
+        update(Job)
+        .where(Job.llm_enrichment == LlmEnrichment.PENDING, Job.created_at < older_than)
+        .values(
+            llm_enrichment=LlmEnrichment.SKIPPED,
+            extraction_error=ExtractionError.GAVE_UP.value,
+            extraction_status=case(
+                (Job.title.is_(None), ExtractionStatus.EXTRACTION_FAILED),
+                else_=Job.extraction_status,
+            ),
+        )
+        .returning(Job.id)
+    )
+    return len((await session.execute(statement)).all())
+
+
+async def job_ids_without_rules(session: AsyncSession, limit: int) -> list[uuid.UUID]:
+    """Jobs whose rules phase has not run and could run now, oldest first.
+
+    That is every new job (the task queued for it may have been lost) and every job a retry
+    reset. Jobs in any other state are left out, so the sweep never queues work that would end
+    as a no-op.
+    """
+    rows = await session.scalars(
+        select(Job.id)
+        .where(
+            Job.extraction_method.is_(None),
+            Job.extraction_status == ExtractionStatus.PENDING,
+            Job.llm_enrichment == LlmEnrichment.NOT_NEEDED,
+        )
+        .order_by(Job.created_at, Job.id)
+        .limit(limit)
+    )
+    return list(rows)
+
+
+async def waiting_job_ids(
+    session: AsyncSession, *, limit: int, user_cap: int, since: datetime
+) -> list[uuid.UUID]:
+    """Jobs waiting for the model, oldest first, leaving out owners who used their daily cap.
+
+    Leaving them out matters: otherwise one user with many old waiting jobs and no budget left
+    would fill every sweep's batch and starve everyone behind them.
+    """
+    if user_cap <= 0:
+        return []
+    capped = (
+        select(LlmUsageEntry.user_id)
+        .where(LlmUsageEntry.created_at > since)
+        .group_by(LlmUsageEntry.user_id)
+        .having(func.count() >= user_cap)
+    )
+    rows = await session.scalars(
+        select(Job.id)
+        .join(Source, Source.id == Job.source_id)
+        .where(Job.llm_enrichment == LlmEnrichment.PENDING, Source.user_id.not_in(capped))
+        .order_by(Job.created_at, Job.id)
+        .limit(limit)
+    )
+    return list(rows)
 
 
 async def _compare_and_set(

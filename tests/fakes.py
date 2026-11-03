@@ -73,6 +73,10 @@ class FakeTaskQueue:
         self.syncing: set[uuid.UUID] = set()  # sources that "have a sync in progress"
         self.is_syncing_calls: list[uuid.UUID] = []
         self.fail_with: Exception | None = None  # set to simulate Redis being down
+        # The extraction side of the queue (the retry endpoint): what was queued, with its delay.
+        self.extraction_enqueued: list[tuple[uuid.UUID, float]] = []
+        self.extracting: set[uuid.UUID] = set()  # jobs that "have an extraction in progress"
+        self.fail_extraction_enqueue_with: Exception | None = None
 
     async def is_syncing(self, source_id: uuid.UUID) -> bool:
         self.is_syncing_calls.append(source_id)
@@ -84,6 +88,16 @@ class FakeTaskQueue:
         if self.fail_with:
             raise self.fail_with
         self.enqueued.append(source_id)
+
+    async def is_extracting(self, job_id: uuid.UUID) -> bool:
+        if self.fail_with:
+            raise self.fail_with
+        return job_id in self.extracting
+
+    async def enqueue_extraction(self, job_id: uuid.UUID, countdown: float = 0.0) -> None:
+        if self.fail_extraction_enqueue_with:
+            raise self.fail_extraction_enqueue_with
+        self.extraction_enqueued.append((job_id, countdown))
 
 
 class FakeSourceLocks:
