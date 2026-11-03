@@ -21,6 +21,7 @@ from app.extraction.types import Confidence, Found
 from app.ingestion.text import MAX_TEXT_CHARS
 from app.models import RemotePolicy, Seniority
 
+RULES_VERSION = "rules_v1"  # stored in jobs.extraction_rules_version; bump when the rules change
 MAX_HEADLINE_CHARS = 250
 MAX_TITLE_CHARS = 150
 MAX_URLS_SCANNED = 100
