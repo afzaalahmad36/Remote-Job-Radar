@@ -66,3 +66,123 @@ def test_upgrade_after_downgrade_lands_on_the_latest_revision(
 
     version = query(test_database_url, "SELECT version_num FROM alembic_version")
     assert version == [ScriptDirectory.from_config(config).get_current_head()]
+
+
+# --- the extraction-state migration -------------------------------------------------------------
+
+BEFORE_STATE = "7bb837af91cb"  # the revision just before extraction state was added
+INSERT_JOB = (
+    "WITH u AS (INSERT INTO users (id, email, hashed_password) "
+    "  VALUES (gen_random_uuid(), 'm@example.com', 'x') RETURNING id), "
+    "s AS (INSERT INTO sources (id, user_id, type, name) "
+    "  SELECT gen_random_uuid(), id, 'rss', 'feed' FROM u RETURNING id) "
+    "INSERT INTO jobs (id, source_id, external_id, raw_text{columns}) "
+    "SELECT gen_random_uuid(), id, 'post-1', 'Hiring a Python developer'{values} FROM s"
+)
+
+
+def execute(database_url: str, sql: str) -> None:
+    async def run() -> None:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        async with engine.begin() as connection:
+            await connection.execute(text(sql))
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def clear_data(database_url: str) -> None:
+    execute(database_url, "DELETE FROM users")  # cascades to sources and jobs
+
+
+def test_existing_jobs_keep_their_data_and_wait_for_the_rules(
+    config: Config, test_database_url: str
+) -> None:
+    command.downgrade(config, BEFORE_STATE)
+    try:
+        execute(test_database_url, INSERT_JOB.format(columns="", values=""))
+
+        command.upgrade(config, "head")
+
+        row = query(
+            test_database_url,
+            "SELECT concat_ws('|', extraction_status, llm_enrichment, extraction_attempts, "
+            "extraction_retries, coalesce(extraction_method::text, 'NULL'), raw_text) FROM jobs",
+        )
+        assert row == ["pending|not_needed|0|0|NULL|Hiring a Python developer"]
+        # ...and the partial index predicate matches it: this is how the sweep finds it.
+        waiting = query(
+            test_database_url, "SELECT count(*) FROM jobs WHERE extraction_method IS NULL"
+        )
+        assert waiting == ["1"]
+    finally:
+        clear_data(test_database_url)
+
+
+def test_the_upgrade_stops_if_a_job_already_has_a_seniority(
+    config: Config, test_database_url: str
+) -> None:
+    command.downgrade(config, BEFORE_STATE)
+    try:
+        execute(
+            test_database_url,
+            INSERT_JOB.format(columns=", seniority", values=", 'senior'"),
+        )
+
+        with pytest.raises(Exception, match="jobs.seniority has values"):
+            command.upgrade(config, "head")
+
+        # Nothing was half-applied: still on the old revision, and seniority is still text.
+        assert query(test_database_url, "SELECT version_num FROM alembic_version") == [BEFORE_STATE]
+        assert query(test_database_url, "SELECT seniority FROM jobs") == ["senior"]
+    finally:
+        clear_data(test_database_url)
+
+
+def test_a_one_step_downgrade_undoes_the_schema_but_keeps_the_not_a_job_label(
+    config: Config, test_database_url: str
+) -> None:
+    execute(
+        test_database_url,
+        INSERT_JOB.format(columns=", extraction_status", values=", 'not_a_job'"),
+    )
+    try:
+        command.downgrade(config, BEFORE_STATE)
+
+        assert "llm_usage" not in query(
+            test_database_url, "SELECT tablename FROM pg_tables WHERE schemaname='public'"
+        )
+        columns = query(
+            test_database_url,
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs'",
+        )
+        assert not {"salary_period", "llm_enrichment", "extraction_retries"} & set(columns)
+        # Older code never sees an unknown status: the row moved to extraction_failed.
+        assert query(test_database_url, "SELECT extraction_status FROM jobs") == [
+            "extraction_failed"
+        ]
+        # The enum value cannot be removed from the type (documented in the migration).
+        labels = query(
+            test_database_url,
+            "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+            "WHERE t.typname = 'extraction_status'",
+        )
+        assert "not_a_job" in labels
+        # The new enum types are gone, and the seniority column is text again.
+        assert (
+            query(
+                test_database_url,
+                "SELECT typname FROM pg_type WHERE typname IN "
+                "('salary_period', 'extraction_method', 'llm_enrichment', 'seniority')",
+            )
+            == []
+        )
+        assert query(
+            test_database_url,
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = 'jobs' AND column_name = 'seniority'",
+        ) == ["character varying"]
+
+        command.upgrade(config, "head")  # ADD VALUE IF NOT EXISTS: the leftover label is fine
+    finally:
+        clear_data(test_database_url)
