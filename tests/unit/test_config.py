@@ -134,12 +134,24 @@ def test_a_thinking_level_the_model_rejects_fails_at_startup(level: str) -> None
 def test_llm_budget_defaults_are_small_and_counted_in_requests() -> None:
     settings = make_settings()
 
-    assert settings.llm_daily_request_cap_per_user == 25
-    assert settings.llm_daily_request_cap_global == 50
+    assert settings.llm_daily_request_cap_per_user == 100
+    assert settings.llm_daily_request_cap_global == 150
     assert settings.llm_requests_per_minute == 5
     assert settings.llm_enrichment_give_up_days == 7
     assert settings.llm_min_post_chars == 500
     assert settings.llm_request_timeout_seconds == 20.0
+
+
+def test_the_budget_has_no_ceiling_tied_to_one_model() -> None:
+    """Limits depend on the model and the project, so a bigger plan only needs a bigger number."""
+    settings = make_settings(
+        llm_daily_request_cap_per_user=1_000_000,
+        llm_daily_request_cap_global=2_000_000,
+        llm_requests_per_minute=10_000,
+    )
+
+    assert settings.llm_requests_per_minute == 10_000
+    assert settings.llm_daily_request_cap_global == 2_000_000
 
 
 def test_llm_settings_are_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:

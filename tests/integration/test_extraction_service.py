@@ -4,79 +4,45 @@ real transactions), so each one deletes what it created."""
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from app.extraction.plan import ExtractionError, plan_rules_phase
 from app.extraction.rules import RULES_VERSION
 from app.extraction.text_hash import raw_text_hash
 from app.llm.prompts import EXTRACT_JOB_V1
 from app.llm.providers.fake import FakeLLMClient
-from app.models import (
-    ExtractionMethod,
-    ExtractionStatus,
-    Job,
-    LlmEnrichment,
-    Source,
-    SourceType,
-    User,
-)
+from app.models import ExtractionMethod, ExtractionStatus, LlmEnrichment
 from app.repositories import extraction_repository as repository
 from app.services import extraction_service
 from app.services.extraction_service import ExtractionOutcome, SessionFactory, extract_job
+from tests.extraction_helpers import (
+    NOTHING_LONG,
+    NOTHING_SHORT,
+    NOW,
+    RICH,
+    TITLE_ONLY_LONG,
+    TITLE_ONLY_SHORT,
+    add_job,
+    row,
+)
 from tests.settings_helpers import settings_with
 
-NOW = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
 SETTINGS = settings_with(llm_min_post_chars=500)
 
-RICH = (
-    "Senior Python Developer at Acme\n\nWe are hiring a Senior Python Developer for our remote "
-    "team.\nStack: Python, Django, PostgreSQL, Docker.\nApply: https://acme.com/careers/senior"
-)
-TITLE_ONLY_SHORT = "Marketing Manager at Acme\n\nWe are hiring a Marketing Manager."
-TITLE_ONLY_LONG = TITLE_ONLY_SHORT + "\n\n" + "We build great products for happy customers. " * 20
-NOTHING_SHORT = "lorem ipsum dolor sit amet " * 4
-NOTHING_LONG = "lorem ipsum dolor sit amet " * 40
 
-
-@pytest.fixture
-async def factory(test_database_url: str, migrated_db: None) -> AsyncIterator[SessionFactory]:
-    engine = create_async_engine(test_database_url, poolclass=NullPool)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    yield sessions
-    async with sessions() as session, session.begin():
-        await session.execute(delete(User).where(User.email.like("%@extraction.test")))  # cascades
-    await engine.dispose()
-
-
-async def add_job(factory: SessionFactory, text: str, **fields: Any) -> uuid.UUID:
-    """A job in its own new user and source (so jobs never share an owner by accident)."""
-    async with factory() as session, session.begin():
-        user = User(email=f"{uuid.uuid4()}@extraction.test", hashed_password="x")
-        session.add(user)
-        await session.flush()
-        source = Source(user_id=user.id, type=SourceType.RSS, name="feed")
-        session.add(source)
-        await session.flush()
-        job = Job(source_id=source.id, external_id="post-1", raw_text=text, **fields)
-        session.add(job)
-        await session.flush()
-        return job.id
-
-
-async def row(factory: SessionFactory, job_id: uuid.UUID) -> Job:
-    async with factory() as session:
-        return await session.get_one(Job, job_id)
-
-
-async def run(factory: SessionFactory, job_id: uuid.UUID, llm: Any = None) -> ExtractionOutcome:
-    return await extract_job(factory, job_id, settings=SETTINGS, llm=llm, now=NOW)
+async def run(
+    factory: SessionFactory,
+    job_id: uuid.UUID,
+    llm: Any = None,
+    cooldown: Any = None,
+) -> ExtractionOutcome:
+    result = await extract_job(
+        factory, job_id, settings=SETTINGS, llm=llm, cooldown=cooldown, now=NOW
+    )
+    return result.outcome
 
 
 # --- the rules phase ----------------------------------------------------------------------------
@@ -116,20 +82,17 @@ async def test_a_job_with_a_title_is_usable_at_once_and_waits_for_a_model(
     assert job.title == "Marketing Manager"
 
 
-async def test_no_model_is_called_in_this_step_even_when_one_is_available(
+async def test_a_client_without_a_cooldown_store_is_never_asked(
     factory: SessionFactory,
 ) -> None:
+    """No shared pause means no safe way to ask, so the model is treated as not available."""
     llm = FakeLLMClient()
-    waiting_job = await add_job(factory, NOTHING_LONG)
+    job_id = await add_job(factory, NOTHING_LONG)
 
-    assert await run(factory, waiting_job, llm) is ExtractionOutcome.AWAITING_MODEL
+    assert await run(factory, job_id, llm, cooldown=None) is ExtractionOutcome.FAILED
 
-    job = await row(factory, waiting_job)
-    assert (job.extraction_status, job.llm_enrichment) == (
-        ExtractionStatus.PENDING,
-        LlmEnrichment.PENDING,
-    )
-    assert job.title is None and job.extraction_error is None
+    job = await row(factory, job_id)
+    assert job.extraction_error == ExtractionError.MODEL_NOT_ENABLED.value
     assert llm.requests == []
 
 

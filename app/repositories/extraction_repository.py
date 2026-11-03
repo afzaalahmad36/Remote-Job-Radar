@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, or_, select, update
+from sqlalchemy import ColumnElement, case, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.extraction.merge import MergedExtraction
-from app.extraction.plan import RulesPlan
+from app.extraction.plan import ExtractionError, RulesPlan
 from app.extraction.rules import RULES_VERSION
 from app.models import (
     ExtractionMethod,
@@ -30,6 +30,7 @@ from app.models import (
     RemotePolicy,
     SalaryPeriod,
     Seniority,
+    Source,
 )
 
 
@@ -38,6 +39,7 @@ class JobSnapshot:
     """A job's state as one worker saw it. Plain values, so no session has to stay open."""
 
     id: uuid.UUID
+    user_id: uuid.UUID  # the owner, through the job's source: whose daily budget a request uses
     raw_text: str
     status: ExtractionStatus
     enrichment: LlmEnrichment
@@ -72,11 +74,14 @@ async def load_snapshot(session: AsyncSession, job_id: uuid.UUID) -> JobSnapshot
         await session.execute(
             select(
                 Job.id,
+                Source.user_id,
                 Job.raw_text,
                 Job.extraction_status,
                 Job.llm_enrichment,
                 Job.extraction_attempts,
-            ).where(Job.id == job_id)
+            )
+            .join(Source, Source.id == Job.source_id)
+            .where(Job.id == job_id)
         )
     ).first()
     return JobSnapshot(*row) if row else None
@@ -195,15 +200,72 @@ async def write_reused_result(
     )
 
 
-async def _compare_and_set(
-    session: AsyncSession, snapshot: JobSnapshot, changes: dict[str, Any]
+async def write_model_result(
+    session: AsyncSession,
+    snapshot: JobSnapshot,
+    values: MergedExtraction,
+    *,
+    status: ExtractionStatus,
+    error: ExtractionError | None,
+    model: str,
+    prompt_version: str,
+    now: datetime,
 ) -> bool:
-    statement = (
-        update(Job)
-        .where(*_still_as_seen(snapshot))
-        .values(**changes, extraction_attempts=snapshot.attempts + 1)
-        .returning(Job.id)
+    """Store the merge of the rules' result and a valid model answer, and finish the enrichment.
+
+    The job must still be waiting for the model, as in the snapshot. It does not add to
+    `extraction_attempts`: leaving `pending` is what makes a second writer lose.
+    """
+    return await _compare_and_set(
+        session,
+        snapshot,
+        {
+            **_value_columns(values),
+            "extraction_method": ExtractionMethod.RULES_LLM,
+            "extraction_rules_version": RULES_VERSION,
+            "extraction_prompt_version": prompt_version,
+            "extraction_model": model,
+            "extracted_at": now,
+            "extraction_error": error.value if error else None,
+            "extraction_status": status,
+            "llm_enrichment": LlmEnrichment.DONE,
+        },
+        bump_attempts=False,
     )
+
+
+async def write_skipped(
+    session: AsyncSession, snapshot: JobSnapshot, error: ExtractionError
+) -> bool:
+    """Give up on the model for this job and keep what the rules found.
+
+    A job that has no title fails here, because nothing is left that could still give it one.
+    """
+    return await _compare_and_set(
+        session,
+        snapshot,
+        {
+            "llm_enrichment": LlmEnrichment.SKIPPED,
+            "extraction_error": error.value,
+            "extraction_status": case(
+                (Job.title.is_(None), ExtractionStatus.EXTRACTION_FAILED),
+                else_=Job.extraction_status,
+            ),
+        },
+        bump_attempts=False,
+    )
+
+
+async def _compare_and_set(
+    session: AsyncSession,
+    snapshot: JobSnapshot,
+    changes: dict[str, Any],
+    *,
+    bump_attempts: bool = True,
+) -> bool:
+    if bump_attempts:
+        changes = {**changes, "extraction_attempts": snapshot.attempts + 1}
+    statement = update(Job).where(*_still_as_seen(snapshot)).values(**changes).returning(Job.id)
     return (await session.execute(statement)).first() is not None  # no row = another worker won
 
 

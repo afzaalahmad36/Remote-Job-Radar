@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from app.core.url_safety import UnsafeUrlError, check_url_syntax
 from app.extraction.rules import RuleResult
-from app.extraction.salary import Salary
+from app.extraction.salary import Salary, period_is_stated
 from app.extraction.schema import JobExtraction
 from app.extraction.stack import MAX_STACK, canonical_name
 from app.extraction.types import Found
@@ -24,7 +24,9 @@ from app.models import RemotePolicy, SalaryPeriod, Seniority
 # a model could not fix a missing contact there; requiring one only spent requests for nothing.
 KEY_FIELDS = ("title", "stack")
 
-_NUMBER = re.compile(r"\d{1,3}(?:[,.\s]\d{3})+|\d+(?:\.\d+)?")
+# A number as a post writes it: "90,000", "90 000", "90.000", "90000", "92.5", and an optional
+# k suffix ("90k", "90 K") that means thousands.
+_NUMBER = re.compile(r"(\d{1,3}(?:[,.\s]\d{3})+|\d+(?:\.\d+)?)(\s?[kK](?![A-Za-z]))?")
 
 
 def missing_key_fields(rules: RuleResult) -> tuple[str, ...]:
@@ -59,6 +61,7 @@ class MergedExtraction:
     apply_email: str | None
     apply_url: str | None
     conflicts: tuple[str, ...]  # fields where a HIGH rule value won over a different model value
+    dropped_stack: int = 0  # model stack entries left out because the post does not contain them
 
 
 def merge(rules: RuleResult, model: JobExtraction | None, text: str) -> MergedExtraction:
@@ -73,11 +76,12 @@ def merge(rules: RuleResult, model: JobExtraction | None, text: str) -> MergedEx
         return from_model
 
     salary = _salary(rules.salary, model, text)
+    stack, dropped_stack = _stack(rules.stack, model, text)
     return MergedExtraction(
         is_job_posting=model.is_job_posting if model else True,
         title=pick("title", rules.title, model.title if model else None),
         company=pick("company", rules.company, model.company if model else None),
-        stack=_stack(rules.stack, model),
+        stack=stack,
         seniority=pick("seniority", rules.seniority, model.seniority if model else None),
         salary_min=salary.minimum if salary else None,
         salary_max=salary.maximum if salary else None,
@@ -89,6 +93,7 @@ def merge(rules: RuleResult, model: JobExtraction | None, text: str) -> MergedEx
         apply_email=rules.apply_email.value if rules.apply_email else None,
         apply_url=pick("apply_url", rules.apply_url, _safe_url(model, text)),
         conflicts=tuple(conflicts),
+        dropped_stack=dropped_stack,
     )
 
 
@@ -96,16 +101,29 @@ def _differs(left: str, right: str) -> bool:
     return left.casefold() != right.casefold()  # enums are strings too
 
 
-def _stack(rule_hits: tuple[str, ...], model: JobExtraction | None) -> tuple[str, ...]:
-    """Every technology either side found; the rules' dictionary hits come first."""
+def _stack(
+    rule_hits: tuple[str, ...], model: JobExtraction | None, text: str
+) -> tuple[tuple[str, ...], int]:
+    """Every technology the rules found plus the model's that the post really contains, and how
+    many of the model's were dropped. The rules' dictionary hits come first."""
     merged: dict[str, str] = {}
-    candidates = [
-        *rule_hits,
-        *((canonical_name(item) or item) for item in (model.stack if model else [])),
-    ]
-    for item in candidates:
+    for item in rule_hits:
         merged.setdefault(item.casefold(), item)
-    return tuple(merged.values())[:MAX_STACK]
+    dropped = 0
+    for entry in model.stack if model else []:
+        name = canonical_name(entry) or entry
+        if _appears_in(entry, text) or _appears_in(name, text):
+            merged.setdefault(name.casefold(), name)
+        else:
+            dropped += 1  # the model named something the post does not say
+    return tuple(merged.values())[:MAX_STACK], dropped
+
+
+def _appears_in(name: str, text: str) -> bool:
+    """True if `name` is in `text` as a whole word, ignoring case. The boundary is "not next to a
+    letter or digit", because a plain word-boundary check breaks on names that end in + or #,
+    like C++ and C#."""
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE) is not None
 
 
 def _safe_url(model: JobExtraction | None, text: str) -> str | None:
@@ -123,8 +141,8 @@ def _safe_url(model: JobExtraction | None, text: str) -> str | None:
 def _salary(
     from_rules: Found[Salary] | None, model: JobExtraction | None, text: str
 ) -> Salary | None:
-    """One salary group, never a mix: the rules' if HIGH, else the model's if the numbers are in
-    the post, else whatever the rules guessed."""
+    """One salary group, never a mix: the rules' if HIGH, else the model's if the post supports
+    it (see `_model_salary_is_supported`), else whatever the rules guessed."""
     if from_rules is not None and from_rules.is_high:
         return from_rules.value
     if model is not None and _model_salary_is_supported(model, text):
@@ -135,23 +153,28 @@ def _salary(
 
 
 def _model_salary_is_supported(model: JobExtraction, text: str) -> bool:
+    """The model's salary group is accepted only if the post itself backs all of it:
+
+    * every amount it gives (min and max) literally appears in the post as a number, written with
+      commas, dots or spaces as thousands separators, or as a number with a k suffix ("90k" is
+      90,000). A number is never accepted just because it is plausible;
+    * and if it gives a period, the post says that period in words (per year, /mo, hourly, ...).
+    """
     amounts = [value for value in (model.salary_min, model.salary_max) if value is not None]
     if not amounts:
         return False
     present = _numbers_in(text)
-    return all(amount in present for amount in amounts)
+    if not all(amount in present for amount in amounts):
+        return False
+    return model.salary_period is None or period_is_stated(text, model.salary_period)
 
 
 def _numbers_in(text: str) -> set[int]:
-    """Every whole number the text writes, also as thousands: "80k" gives 80 and 80000."""
+    """Every whole number the text writes. "90k" gives 90,000 (and not 90); a bare "90" gives 90."""
     present: set[int] = set()
     for match in _NUMBER.finditer(text):
-        digits = (
-            re.sub(r"[,.\s]", "", match.group())
-            if re.search(r"[,.\s]\d{3}", match.group())
-            else match.group()
-        )
+        written, thousands = match.groups()
+        digits = re.sub(r"[,.\s]", "", written) if re.search(r"[,.\s]\d{3}", written) else written
         number = float(digits)  # only digits and one optional decimal point remain
-        present.add(int(number))
-        present.add(int(number * 1000))  # "80k" means 80,000
+        present.add(round(number * 1000) if thousands else int(number))
     return present

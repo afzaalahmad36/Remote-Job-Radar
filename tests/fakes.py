@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 
+from app.services.cooldown import CooldownUnavailable
 from tests.network_guard import UNREACHABLE_PORT
 
 FEEDS_DIR = Path(__file__).parent / "fixtures" / "feeds"
@@ -142,3 +143,32 @@ class FakeResolver:
         if host not in self.records:
             raise OSError(f"cannot resolve {host}")  # what a failed DNS lookup raises
         return self.records[host]
+
+
+class FakeCooldown:
+    """In-memory Cooldown: `seconds_left` is the pause in effect, `started` records every pause
+    that was begun. `unavailable` simulates Redis being down for reads and writes alike;
+    `fail_start` only for writes."""
+
+    def __init__(
+        self,
+        seconds_left: float | None = None,
+        *,
+        unavailable: bool = False,
+        fail_start: bool = False,
+    ) -> None:
+        self.seconds_left = seconds_left
+        self.unavailable = unavailable
+        self.fail_start = fail_start
+        self.started: list[float] = []
+
+    async def remaining(self) -> float | None:
+        if self.unavailable:
+            raise CooldownUnavailable("down")
+        return self.seconds_left
+
+    async def start(self, seconds: float) -> None:
+        if self.unavailable or self.fail_start:
+            raise CooldownUnavailable("down")
+        self.started.append(seconds)
+        self.seconds_left = max(self.seconds_left or 0.0, seconds)

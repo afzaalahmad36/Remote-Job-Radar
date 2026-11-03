@@ -17,6 +17,7 @@ from app.main import create_app
 from app.models import SourceType
 from tests import network_guard
 from tests.db_utils import UnsafeDatabaseError, alembic_config, get_test_database_url
+from tests.extraction_helpers import factory  # noqa: F401  (fixture)
 from tests.fakes import UNREACHABLE_REDIS_URL, FakeFeedServer, FakeResolver, FakeTaskQueue
 from tests.task_helpers import celery_env, seed  # noqa: F401  (fixtures, registered for all tests)
 
