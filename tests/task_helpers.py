@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.models import Job, RefreshToken, Source, SourceType, User
+from app.models import Job, LlmUsageEntry, RefreshToken, Source, SourceType, User
 from tests.fakes import UNREACHABLE_REDIS_URL
 
 
@@ -88,6 +88,53 @@ class Seeder:
 
         jobs: list[Job] = self._run(work)
         return jobs
+
+    def job(self, source_id: uuid.UUID, text: str, **fields: Any) -> uuid.UUID:
+        """A job in `source_id`; `fields` are Job columns (status, created_at, title, ...)."""
+
+        async def work(session: AsyncSession) -> uuid.UUID:
+            job = Job(source_id=source_id, external_id=str(uuid.uuid4()), raw_text=text, **fields)
+            session.add(job)
+            await session.commit()
+            return job.id
+
+        job_id: uuid.UUID = self._run(work)
+        return job_id
+
+    def job_row(self, job_id: uuid.UUID) -> Job:
+        async def work(session: AsyncSession) -> Job | None:
+            return await session.get(Job, job_id)
+
+        row: Job | None = self._run(work)
+        assert row is not None
+        return row
+
+    def usage(self, user_id: uuid.UUID) -> list[LlmUsageEntry]:
+        async def work(session: AsyncSession) -> list[LlmUsageEntry]:
+            rows = await session.scalars(
+                select(LlmUsageEntry).where(LlmUsageEntry.user_id == user_id)
+            )
+            return list(rows)
+
+        entries: list[LlmUsageEntry] = self._run(work)
+        return entries
+
+    def add_usage(self, user_id: uuid.UUID, created_at: datetime, outcome: str = "ok") -> uuid.UUID:
+        async def work(session: AsyncSession) -> uuid.UUID:
+            entry = LlmUsageEntry(
+                user_id=user_id,
+                provider="fake",
+                model="fake-model",
+                prompt_version="extract_job_v1",
+                outcome=outcome,
+                created_at=created_at,
+            )
+            session.add(entry)
+            await session.commit()
+            return entry.id
+
+        entry_id: uuid.UUID = self._run(work)
+        return entry_id
 
     def delete_source(self, source_id: uuid.UUID) -> None:
         async def work(session: AsyncSession) -> None:

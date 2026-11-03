@@ -117,6 +117,7 @@ def test_stored_error_texts_are_a_small_fixed_set_that_fits_the_column() -> None
         "model reply was not valid",
         "request refused locally",
         "model request was rejected",
+        "gave up waiting for the model",
         "unexpected error",
     }
     assert all(len(error.value) <= 500 for error in ExtractionError)

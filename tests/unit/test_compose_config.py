@@ -133,3 +133,29 @@ def test_the_worker_has_a_real_healthcheck_and_gets_time_to_finish_its_tasks(
 
 def test_the_database_and_redis_still_publish_no_ports(services: dict[str, Any]) -> None:
     assert "ports" not in services["db"] and "ports" not in services["redis"]
+
+
+def test_the_worker_and_beat_read_the_same_env_file_as_the_api(services: dict[str, Any]) -> None:
+    """The LLM settings (provider, model, key, kill switch, budgets) live in .env. The worker is
+    the process that runs the extraction task, so it must get exactly what the api gets."""
+    env_files = {name: services[name]["env_file"] for name in ("api", "worker", "beat")}
+
+    assert env_files == {"api": ".env", "worker": ".env", "beat": ".env"}
+
+
+def test_compose_never_hard_codes_an_llm_setting(services: dict[str, Any]) -> None:
+    """Turning the model on stays a deliberate edit of .env: compose must not set it for you,
+    and must not give one service a different value from another."""
+    for name in ("api", "worker", "beat"):
+        assert not [
+            key for key in services[name]["environment"] if key.startswith(("LLM_", "GEMINI_"))
+        ]
+
+
+def test_the_extraction_sweep_has_exactly_one_scheduler(services: dict[str, Any]) -> None:
+    """The sweep is a beat entry, so more than one beat would queue it twice."""
+    beats = [
+        name for name, service in services.items() if "beat" in " ".join(service.get("command", []))
+    ]
+
+    assert beats == ["beat"]

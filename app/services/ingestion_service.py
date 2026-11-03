@@ -23,6 +23,7 @@ class IngestionSummary:
     inserted: int  # new jobs stored
     skipped: int  # posts not stored: already known, repeated inside the feed, or empty
     error: str | None  # short sanitized reason if the sync failed, else None
+    new_job_ids: tuple[uuid.UUID, ...] = ()  # the jobs this sync actually inserted
 
 
 def default_fetchers() -> dict[SourceType, SourceFetcher]:
@@ -67,7 +68,8 @@ async def ingest_source(
         logger.exception("Unexpected error while fetching source %s", source.id)
         return await _record_failure(session, source, "Unexpected error while fetching")
 
-    inserted = await _insert_jobs(session, source.id, result.jobs)
+    new_job_ids = await _insert_jobs(session, source.id, result.jobs)
+    inserted = len(new_job_ids)
     source.last_synced_at = now
     source.last_error = None
     if not result.not_modified:  # on a 304 we keep the validators we already have
@@ -79,6 +81,7 @@ async def ingest_source(
         inserted=inserted,
         skipped=max(result.fetched - inserted, 0),
         error=None,
+        new_job_ids=new_job_ids,
     )
 
 
@@ -88,10 +91,12 @@ async def _record_failure(session: AsyncSession, source: Source, message: str) -
     return IngestionSummary(fetched=0, inserted=0, skipped=0, error=source.last_error)
 
 
-async def _insert_jobs(session: AsyncSession, source_id: uuid.UUID, jobs: list[RawJob]) -> int:
-    """Insert the posts that are new for this source and return how many that was."""
+async def _insert_jobs(
+    session: AsyncSession, source_id: uuid.UUID, jobs: list[RawJob]
+) -> tuple[uuid.UUID, ...]:
+    """Insert the posts that are new for this source and return the ids of the new rows."""
     if not jobs:
-        return 0
+        return ()
     rows = [
         {
             "id": uuid.uuid4(),
@@ -113,4 +118,4 @@ async def _insert_jobs(session: AsyncSession, source_id: uuid.UUID, jobs: list[R
         .on_conflict_do_nothing(index_elements=["source_id", "external_id"])
         .returning(Job.id)
     )
-    return len((await session.execute(statement)).scalars().all())  # RETURNING lists new rows only
+    return tuple((await session.execute(statement)).scalars().all())  # RETURNING: new rows only

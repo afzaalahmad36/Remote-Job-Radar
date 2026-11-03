@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.api_deps import get_resolver, get_task_queue
+from app.api_deps import get_extraction_queue, get_resolver, get_task_queue
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.ingestion.base import SourceFetcher
@@ -83,6 +83,7 @@ def app(settings: Settings, resolver: FakeResolver, task_queue: FakeTaskQueue) -
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_resolver] = lambda: resolver
     app.dependency_overrides[get_task_queue] = lambda: task_queue
+    app.dependency_overrides[get_extraction_queue] = lambda: task_queue
     return app
 
 

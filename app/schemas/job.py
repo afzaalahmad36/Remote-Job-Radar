@@ -4,6 +4,12 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models.job import ExtractionStatus, RemotePolicy
+from app.services.extraction_retry import RetryStatus
+
+
+class ExtractAcceptedOut(BaseModel):
+    job_id: uuid.UUID
+    status: RetryStatus  # "queued", or "already_running" (a run is in progress; not an error)
 
 
 class JobRead(BaseModel):

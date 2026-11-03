@@ -32,6 +32,7 @@ class ExtractionError(StrEnum):
     INVALID_REPLY = "model reply was not valid"  # failed validation twice
     REFUSED_LOCALLY = "request refused locally"  # our own privacy or size guard said no
     REJECTED = "model request was rejected"  # the provider refused it (key, model, request)
+    GAVE_UP = "gave up waiting for the model"  # the sweep, after LLM_ENRICHMENT_GIVE_UP_DAYS
     UNEXPECTED = "unexpected error"
 
 

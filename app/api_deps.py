@@ -13,8 +13,9 @@ from app.db.session import get_session
 from app.models import User
 from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, PageParams
 from app.services import auth_service
+from app.services.extraction_retry import ExtractionQueue
 from app.services.sync_service import TaskQueue
-from app.tasks.locking import redis_locks_for
+from app.tasks.locking import redis_job_locks_for, redis_locks_for
 from app.tasks.queue import CeleryTaskQueue
 
 # `Depends` is FastAPI's dependency injection: FastAPI calls get_settings() for each request
@@ -73,10 +74,26 @@ def get_task_queue(settings: SettingsDep) -> TaskQueue:
 QueueDep = Annotated[TaskQueue, Depends(get_task_queue)]
 
 
+def get_extraction_queue(settings: SettingsDep) -> ExtractionQueue:
+    """The same queue, seen from the extraction endpoint; tests override this too."""
+    return CeleryTaskQueue(
+        redis_locks_for(settings.redis_url), job_locks=redis_job_locks_for(settings.redis_url)
+    )
+
+
+ExtractionQueueDep = Annotated[ExtractionQueue, Depends(get_extraction_queue)]
+
+
 async def rate_limit_sync(request: Request, user: CurrentUserDep) -> None:
     """Limit manual syncs per user: each one makes outbound HTTP requests on the server."""
     limiter: RateLimiter = request.app.state.sync_rate_limiter
     limiter.check(f"sync:{user.id}")
+
+
+async def rate_limit_extract(request: Request, user: CurrentUserDep) -> None:
+    """Limit extraction retries per user, in a bucket of their own (not shared with syncs)."""
+    limiter: RateLimiter = request.app.state.extract_rate_limiter
+    limiter.check(f"extract:{user.id}")
 
 
 async def rate_limit_auth(request: Request) -> None:

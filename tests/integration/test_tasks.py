@@ -31,10 +31,26 @@ def locks() -> FakeSourceLocks:
     return FakeSourceLocks()
 
 
+class RecordingEnqueue:
+    """Stands in for publishing extraction tasks: records (job id, delay) and publishes nothing."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[uuid.UUID, float]] = []
+
+    def __call__(self, job_id: uuid.UUID, delay: float) -> None:
+        self.calls.append((job_id, delay))
+
+
 def run(
     seed: Seeder, source_id: uuid.UUID, settings: Settings, fetchers: Any, locks: FakeSourceLocks
 ) -> IngestOutcome:
-    return run_ingest_source(source_id, settings=settings, fetchers=fetchers, locks=locks)
+    return run_ingest_source(
+        source_id,
+        settings=settings,
+        fetchers=fetchers,
+        locks=locks,
+        enqueue_extraction=RecordingEnqueue(),  # never the real broker
+    )
 
 
 # --- ingest one source ---------------------------------------------------------------------------
