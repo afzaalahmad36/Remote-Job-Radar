@@ -7,7 +7,8 @@ outage can never leave this part half done.
 Steps, in order:
 
 1. relabel `reserved` usage rows nobody finished as `abandoned` (they keep counting);
-2. give up on jobs that have waited for the model longer than LLM_ENRICHMENT_GIVE_UP_DAYS;
+2. give up on jobs that have waited for the model longer than LLM_ENRICHMENT_GIVE_UP_DAYS,
+   counted from when the rules phase made them pending (`extracted_at`, else `created_at`);
 3. pick jobs whose rules phase has not run (new jobs whose task was lost, and retried jobs);
 4. pick jobs waiting for the model, but only when asking could succeed: a client exists, no pause
    is in effect, and the global budget has room.
