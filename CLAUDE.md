@@ -178,6 +178,58 @@ Migration note: `jobs.seniority` was free text that nothing wrote to. The migrat
 4. `score_job_for_user` combines: cosine similarity (pgvector) for candidate retrieval, then the LLM for a 0-100 score with reasons and missing skills. Store in `job_matches`.
 5. `draft_email` generates a tailored email using the CV + job; the user edits before sending. **The app never sends emails automatically.**
 
+### Extraction accuracy evaluation (the pass rule)
+
+This rule is fixed BEFORE any post is labelled, so the target cannot be tuned to the result. It is
+measured by hand (`scripts/eval_label.py` to label, `scripts/try_extraction.py --eval` to score);
+CI never labels or scores real posts, and the scoring never makes a provider request.
+
+**What is labelled.** N=30 posts (`--n`, a fixed `--seed`) from one source, with distinct
+`raw_text_hash`, labelled blind (the system's extraction is never shown). A blank label field means
+"the post does not say". Stack: list every technology the post names, required or optional.
+Salary follows the rules' conventions: a single amount is min = max, "up to X" is max only, "from X"
+or "X+" is min only.
+
+**Two outputs are scored the same way:** the stored extraction (the job's database columns) and the
+rules recomputed offline from `raw_text`.
+
+**Outcome of one field**, in one of five buckets: both blank = correct (correctly absent); same
+value = correct; different value = wrong; label has a value and the system is blank = missing; label
+is blank and the system has a value = invented.
+
+**Normalisation** (both sides): Unicode NFKC, casefold, collapse whitespace, strip surrounding
+punctuation and emoji. Title: also remove gender markers such as `(m/f/d)` and treat `- – / | ,` as
+spaces; the match is then exact (no fuzzy match, no "contains"). Company: the same, plus legal
+suffixes at the end (inc, llc, ltd, gmbh, ag, bv, sa, plc, corp, co). Stack entries go through
+`canonical_name()` (`app/extraction/stack.py`); an entry the dictionary does not know is compared as
+its casefolded, whitespace-collapsed text. Enums compare as enum values (`on-site` is `onsite`);
+currency is an upper-case ISO code; amounts are exact integers.
+
+**A post parses correctly when all of these hold:**
+1. Title: the system has one and it matches the label.
+2. Company: it matches, or the label has none (an invented company does not fail the post, but it
+   is counted as an invented value for the gate below).
+3. Stack: the system has no entry outside the label and at least 70% of the label is found (an empty
+   label passes recall trivially; any system entry then fails).
+4. Remote policy, salary and seniority: missing or correct. A wrong or invented value fails the post.
+   Salary is correct only when every non-blank component (min, max, currency, period) matches; a
+   blank component never fails.
+
+**Target: at least 90% of the labelled posts parse correctly, on this sample** (30 posts, one source,
+a fixed seed). It is not a claim about accuracy in general. The result is printed with a Wilson 95%
+interval, because 27 of 30 still leaves a wide range; the target is judged on the point estimate.
+
+**Invented-values gate:** if more than 10% of the labelled posts contain any invented value (company,
+a salary component, seniority or remote policy), the evaluation reports FAIL whatever the
+parse-correct share is. An invented company counts here even though it does not fail the post.
+
+**Reported next to the verdict** (not part of the pass rule): per-field accuracy, and per-field recall
+on non-blank labels (how often a non-blank label value is found correctly); counts of wrong, missing
+and invented values; stack precision, recall and F1 (micro-averaged); the stack dictionary-gap count
+(label entries unknown to the dictionary, which cost recall without being a rule miss); and the
+number of posts excluded, with the reason (stale hash, blank title label, skipped). Excluded posts
+are not scored; the share is computed over the posts that remain.
+
 **Scoring rules:** the score must be explainable. Always store `reasons` and `missing_skills`. Cache results; don't re-score unless the CV or job changed.
 
 ---
