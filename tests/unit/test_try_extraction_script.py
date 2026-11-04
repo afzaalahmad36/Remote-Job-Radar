@@ -31,7 +31,6 @@ from scripts.try_extraction import (
     drop_duplicate_texts,
     ensure_jobs_table,
     field_coverage,
-    load_labels,
     parse_args,
     provider_settings,
     request_fields,
@@ -258,19 +257,6 @@ async def test_the_run_record_has_no_post_text(tmp_path: Path) -> None:
     saved = path.read_text(encoding="utf-8")
     assert "PRIVATE-MARKER" not in saved
     assert json.loads(saved)["budget"] == {"max": 1, "used": 1, "stop": None}
-
-
-def test_a_labels_file_is_checked_against_the_documented_format(tmp_path: Path) -> None:
-    good = tmp_path / "good.json"
-    good.write_text(json.dumps({"posts": [{"text": "t", "expected": {"title": "x"}}]}))
-    bad = tmp_path / "bad.json"
-    bad.write_text(json.dumps({"posts": [{"text": "t", "expected": {"salary": 1}}]}))
-
-    assert len(load_labels(good).posts) == 1
-    with pytest.raises(ScriptError, match="does not match"):
-        load_labels(bad)
-    with pytest.raises(ScriptError, match="cannot read"):
-        load_labels(tmp_path / "missing.json")
 
 
 # --- which database may be read ----------------------------------------------------------------

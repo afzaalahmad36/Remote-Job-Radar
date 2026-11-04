@@ -28,14 +28,9 @@ post. `--ping-level` says how much of a real request is included, so a failure c
 
 Each level is exactly one request, with the same confirmation question and run record.
 
-Evaluation (stub): `--eval labeled.json` only checks the file's format for now. Format:
-
-    {"posts": [{"text": "full post text...",
-                "expected": {"title": "Backend Engineer", "company": "Acme",
-                             "stack": ["Python", "Django"], "seniority": "senior",
-                             "remote_policy": "remote"}}]}
-
-Every key inside "expected" is optional; a key left out means "not labeled" for that post.
+Evaluation: `--eval labels.json` scores the stored extraction and the rules (recomputed offline)
+against labels made by hand with `scripts/eval_label.py`. It reads the database, makes no provider
+request and refuses --allow-provider. The pass rule is in CLAUDE.md (section 6).
 """
 
 import argparse
@@ -50,11 +45,8 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select, text
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings, get_settings
 from app.extraction.merge import (
@@ -82,8 +74,9 @@ from app.llm.base import (
 from app.llm.client import build_client
 from app.llm.prompts import EXTRACT_JOB_V1, build_extraction_request
 from app.models import Job
+from scripts.db_guard import ScriptError, database_target, ensure_jobs_table, read_only_engine
+from scripts.eval_run import run_eval
 
-EXPECTED_DATABASE = "jobradar"  # the development database; never the test one or another project's
 HARD_MAX_REQUESTS = 10  # not a setting and not a flag: raising it means editing this file
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
@@ -104,10 +97,6 @@ COVERAGE_FIELDS = (
 COMPARED_FIELDS = (
     "title", "company", "stack", "seniority", "salary", "remote_policy", "apply_url", "apply_email"
 )  # fmt: skip
-
-
-class ScriptError(Exception):
-    """A problem the user can fix; main() prints it without a traceback."""
 
 
 # --- arguments ---------------------------------------------------------------------------------
@@ -158,7 +147,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"most provider requests this run may make (1-{HARD_MAX_REQUESTS})",
     )
     parser.add_argument("--yes", action="store_true", help="skip the confirmation question")
-    parser.add_argument("--eval", type=Path, metavar="LABELED.json", help="check a labels file")
+    parser.add_argument(
+        "--eval", type=Path, metavar="LABELS.json", help="score the extraction against hand labels"
+    )
     parser.add_argument(
         "--ping",
         action="store_true",
@@ -515,34 +506,9 @@ class PostRow:
     text: str
 
 
-def database_target(database_url: str) -> str:
-    """ "host:port/name" of the database, after checking it is the one this script may read.
-
-    The password is never part of the result. The name is checked before any connection is made.
-    """
-    try:
-        url = make_url(database_url)
-    except ArgumentError:
-        raise ScriptError("DATABASE_URL is not a valid database URL") from None
-    if url.database != EXPECTED_DATABASE:
-        raise ScriptError(
-            f"refusing to read database {url.database!r} on {url.host}:{url.port}: "
-            f"this script only reads a database named {EXPECTED_DATABASE!r}"
-        )
-    return f"{url.host or '(local socket)'}:{url.port or 5432}/{url.database}"
-
-
-async def ensure_jobs_table(connection: AsyncConnection) -> None:
-    """Refuse a database that has no `jobs` table (a wrong or unmigrated database)."""
-    if await connection.scalar(text("select to_regclass('jobs')::text")) is None:
-        raise ScriptError("the database has no 'jobs' table: wrong database, or not migrated")
-
-
 async def load_posts(database_url: str, source_id: uuid.UUID | None, limit: int) -> list[PostRow]:
     """The newest jobs. The connection itself is read-only (Postgres refuses any write)."""
-    engine = create_async_engine(
-        database_url, connect_args={"server_settings": {"default_transaction_read_only": "on"}}
-    )
+    engine = read_only_engine(database_url)
     query = select(Job.id, Job.raw_text).order_by(
         Job.posted_at.desc().nulls_last(), Job.created_at.desc()
     )
@@ -590,42 +556,6 @@ def confirm(question: str) -> bool:
         return input(f"{question} [y/N] ").strip().lower() in {"y", "yes"}
     except EOFError:
         return False
-
-
-# --- labeled data (stub) -----------------------------------------------------------------------
-
-
-class Expected(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    title: str | None = None
-    company: str | None = None
-    stack: list[str] | None = None
-    seniority: str | None = None
-    remote_policy: str | None = None
-
-
-class LabeledPost(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(min_length=1)
-    expected: Expected
-
-
-class LabeledFile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    posts: list[LabeledPost] = Field(min_length=1, max_length=MAX_LIMIT)
-
-
-def load_labels(path: Path) -> LabeledFile:
-    try:
-        return LabeledFile.model_validate_json(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise ScriptError(f"cannot read {path}: {type(error).__name__}") from None
-    except ValidationError as error:
-        problems = sorted({".".join(str(p) for p in e["loc"]) for e in error.errors()})
-        raise ScriptError(f"{path} does not match the format: {', '.join(problems[:6])}") from None
 
 
 # --- the run record ----------------------------------------------------------------------------
@@ -760,10 +690,7 @@ def run_ping_command(args: argparse.Namespace, settings: Settings) -> int:
 
 def run(args: argparse.Namespace) -> int:
     if args.eval is not None:
-        labels = load_labels(args.eval)
-        print(f"{args.eval}: format OK, {len(labels.posts)} labeled posts.")
-        print("--eval is a stub: accuracy scoring is not built yet.")
-        return 0
+        return run_eval(args.eval, get_settings())  # reads only; never builds a provider client
 
     settings = get_settings()
     if args.ping:
