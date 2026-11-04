@@ -99,7 +99,7 @@ job-radar/
 │   ├── integration/
 │   ├── conftest.py
 │   └── factories.py
-├── scripts/                    # one-off CLI helpers (seed data, etc.)
+├── scripts/                    # manual CLI helpers: try_extraction, eval_label, eval_* (never run by CI or app code)
 └── frontend/                   # Next.js app
 ```
 
@@ -177,6 +177,58 @@ Migration note: `jobs.seniority` was free text that nothing wrote to. The migrat
 3. `embed_job` computes the embedding.
 4. `score_job_for_user` combines: cosine similarity (pgvector) for candidate retrieval, then the LLM for a 0-100 score with reasons and missing skills. Store in `job_matches`.
 5. `draft_email` generates a tailored email using the CV + job; the user edits before sending. **The app never sends emails automatically.**
+
+### Extraction accuracy evaluation (the pass rule)
+
+This rule is fixed BEFORE any post is labelled, so the target cannot be tuned to the result. It is
+measured by hand (`scripts/eval_label.py` to label, `scripts/try_extraction.py --eval` to score);
+CI never labels or scores real posts, and the scoring never makes a provider request.
+
+**What is labelled.** N=30 posts (`--n`, a fixed `--seed`) from one source, with distinct
+`raw_text_hash`, labelled blind (the system's extraction is never shown). A blank label field means
+"the post does not say". Stack: list every technology the post names, required or optional.
+Salary follows the rules' conventions: a single amount is min = max, "up to X" is max only, "from X"
+or "X+" is min only.
+
+**Two outputs are scored the same way:** the stored extraction (the job's database columns) and the
+rules recomputed offline from `raw_text`.
+
+**Outcome of one field**, in one of five buckets: both blank = correct (correctly absent); same
+value = correct; different value = wrong; label has a value and the system is blank = missing; label
+is blank and the system has a value = invented.
+
+**Normalisation** (both sides): Unicode NFKC, casefold, collapse whitespace, strip surrounding
+punctuation and emoji. Title: also remove gender markers such as `(m/f/d)` and treat `- – / | ,` as
+spaces; the match is then exact (no fuzzy match, no "contains"). Company: the same, plus legal
+suffixes at the end (inc, llc, ltd, gmbh, ag, bv, sa, plc, corp, co). Stack entries go through
+`canonical_name()` (`app/extraction/stack.py`); an entry the dictionary does not know is compared as
+its casefolded, whitespace-collapsed text. Enums compare as enum values (`on-site` is `onsite`);
+currency is an upper-case ISO code; amounts are exact integers.
+
+**A post parses correctly when all of these hold:**
+1. Title: the system has one and it matches the label.
+2. Company: it matches, or the label has none (an invented company does not fail the post, but it
+   is counted as an invented value for the gate below).
+3. Stack: the system has no entry outside the label and at least 70% of the label is found (an empty
+   label passes recall trivially; any system entry then fails).
+4. Remote policy, salary and seniority: missing or correct. A wrong or invented value fails the post.
+   Salary is correct only when every non-blank component (min, max, currency, period) matches; a
+   blank component never fails.
+
+**Target: at least 90% of the labelled posts parse correctly, on this sample** (30 posts, one source,
+a fixed seed). It is not a claim about accuracy in general. The result is printed with a Wilson 95%
+interval, because 27 of 30 still leaves a wide range; the target is judged on the point estimate.
+
+**Invented-values gate:** if more than 10% of the labelled posts contain any invented value (company,
+a salary component, seniority or remote policy), the evaluation reports FAIL whatever the
+parse-correct share is. An invented company counts here even though it does not fail the post.
+
+**Reported next to the verdict** (not part of the pass rule): per-field accuracy, and per-field recall
+on non-blank labels (how often a non-blank label value is found correctly); counts of wrong, missing
+and invented values; stack precision, recall and F1 (micro-averaged); the stack dictionary-gap count
+(label entries unknown to the dictionary, which cost recall without being a rule miss); and the
+number of posts excluded, with the reason (stale hash, blank title label, skipped). Excluded posts
+are not scored; the share is computed over the posts that remain.
 
 **Scoring rules:** the score must be explainable. Always store `reasons` and `missing_skills`. Cache results; don't re-score unless the CV or job changed.
 
@@ -269,7 +321,17 @@ uv run python -m scripts.try_extraction --source-id <uuid> --limit 100
 # text or key under .local/ (git-ignored). Needs LLM_PROVIDER, LLM_MODEL_EXTRACTION and
 # GEMINI_API_KEY in .env; it turns the kill switch on for that process only, never in .env.
 uv run python -m scripts.try_extraction --allow-provider --max-requests 3
-uv run python -m scripts.try_extraction --eval labeled.json  # stub: only checks the file format
+# Accuracy evaluation (section 6, "Extraction accuracy evaluation" has the pass rule). Label first,
+# blind: N=30 posts (--n) of ONE source with distinct text, a fixed --seed gives the same pick again.
+# It never shows what the system extracted, reads the database read-only (same guard as above) and
+# saves .local/eval/labels.json after every post, so you can /quit and run it again to resume.
+# Conventions are printed in the script's header: blank = the post does not say; a single salary
+# amount is min = max; list every technology the post names.
+uv run python -m scripts.eval_label --source-name "My Feed" --n 30 --seed 1
+# Then score: the stored extraction and the rules recomputed offline, against your labels. It reads
+# the database, makes ZERO provider requests (it refuses --allow-provider and builds no client) and
+# writes a run record without post text or labels under .local/eval/runs/.
+uv run python -m scripts.try_extraction --eval .local/eval/labels.json
 # Connectivity ping: ONE real request with fixed text (no database, no stored post) to check the key,
 # endpoint and request shape. It shows the body field names and asks for confirmation. Levels:
 # 1 = model + input + generation_config; 2 = + system_instruction + store=false; 3 = + the JSON-schema
@@ -393,7 +455,7 @@ Never commit `.env` or Telegram session files. Keep them in `.gitignore`.
 
 **Deferred: Telegram ingestion.** It needs a Telegram API application and a user session, and the owner has only a personal account for now. The `SourceFetcher` interface and the `telegram` source type are in place so it can be added later without touching the rest of the pipeline. Phase 2 is otherwise complete.
 
-**Current phase:** 3 — rules-first extraction. Done: rules, merge, schema, provider-agnostic client with the Gemini adapter, the manual `scripts/try_extraction.py` (its `--ping` levels 1-3 were run against the real Gemini API by the owner with gemini-3.5-flash-lite, level 3 validated against `JobExtraction`). The DB state (extraction columns, `llm_usage`, migration), the service's rules phase (hash reuse, compare-and-set writes), the model path (request budgets, throttle, reservation rows, shared cooldown, validation retry, stack grounding), the Celery task `extract_job`, the post-ingest hook, the extraction sweep and `POST /jobs/{id}/extract` are built and tested with fakes only; the kill switch is off, so no real provider has been asked by the pipeline. Next: the owner decides when to turn the kill switch on (a `.env` edit), then measure accuracy on a labelled sample with `--eval` (still a stub); an optional read-only change to hide `not_a_job` in `GET /jobs`. The Ollama adapter comes on request.
+**Current phase:** 3 — rules-first extraction. Done: rules, merge, schema, provider-agnostic client with the Gemini adapter, the manual `scripts/try_extraction.py` (its `--ping` levels 1-3 were run against the real Gemini API by the owner with gemini-3.5-flash-lite, level 3 validated against `JobExtraction`). The DB state (extraction columns, `llm_usage`, migration), the service's rules phase (hash reuse, compare-and-set writes), the model path (request budgets, throttle, reservation rows, shared cooldown, validation retry, stack grounding), the Celery task `extract_job`, the post-ingest hook, the extraction sweep and `POST /jobs/{id}/extract` are built and tested with fakes only; the kill switch is off, so no real provider has been asked by the pipeline. The accuracy evaluation tooling is built (`scripts/eval_label.py` to label blind, `try_extraction.py --eval` to score, the pass rule in section 6); no post has been labelled yet. Next: the owner labels 30 posts and runs `--eval`, then decides when to turn the kill switch on (a `.env` edit) and compares; an optional read-only change to hide `not_a_job` in `GET /jobs`. The Ollama adapter comes on request.
 
 ---
 
