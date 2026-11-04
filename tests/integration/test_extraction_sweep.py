@@ -134,6 +134,93 @@ async def test_the_give_up_age_follows_the_setting(factory: SessionFactory) -> N
     assert (await row(factory, job_id)).llm_enrichment is LlmEnrichment.SKIPPED
 
 
+async def test_the_wait_is_counted_from_the_rules_phase_not_from_the_row_creation(
+    factory: SessionFactory,
+) -> None:
+    """A row that sat in the database for a month before the pipeline ran must not be given up."""
+    job_id = await add_job(
+        factory,
+        NEEDS_STACK,
+        created_at=NOW - timedelta(days=30),
+        extracted_at=NOW - timedelta(minutes=1),  # the rules phase ran just now
+        **WAITING,
+    )
+
+    result = await work(factory, cooldown=FakeCooldown())
+
+    assert result.gave_up == 0
+    assert (await row(factory, job_id)).llm_enrichment is LlmEnrichment.PENDING
+    assert result.enrichment_job_ids == [job_id]
+
+
+async def test_the_wait_boundary_is_measured_on_extracted_at(factory: SessionFactory) -> None:
+    cutoff = NOW - timedelta(days=SETTINGS.llm_enrichment_give_up_days)
+    created = NOW - timedelta(days=60)
+    at_limit = await add_job(
+        factory, NEEDS_STACK, created_at=created, extracted_at=cutoff, **WAITING
+    )
+    too_old = await add_job(
+        factory, NEEDS_STACK, created_at=created, extracted_at=TOO_OLD, **WAITING
+    )
+
+    result = await work(factory)
+
+    assert result.gave_up == 1  # exactly at the limit still waits, as before
+    assert (await row(factory, at_limit)).llm_enrichment is LlmEnrichment.PENDING
+    assert (await row(factory, too_old)).llm_enrichment is LlmEnrichment.SKIPPED
+
+
+async def test_a_young_row_with_an_old_extracted_at_is_still_given_up(
+    factory: SessionFactory,
+) -> None:
+    """extracted_at wins whenever it is set, in both directions."""
+    job_id = await add_job(
+        factory, NEEDS_STACK, created_at=NOW - timedelta(hours=1), extracted_at=TOO_OLD, **WAITING
+    )
+
+    assert (await work(factory)).gave_up == 1
+    assert (await row(factory, job_id)).llm_enrichment is LlmEnrichment.SKIPPED
+
+
+async def test_without_extracted_at_the_wait_falls_back_to_created_at(
+    factory: SessionFactory,
+) -> None:
+    old = await add_job(factory, NEEDS_STACK, created_at=TOO_OLD, extracted_at=None, **WAITING)
+    young = await add_job(
+        factory, NEEDS_STACK, created_at=NOW - timedelta(days=1), extracted_at=None, **WAITING
+    )
+
+    assert (await work(factory)).gave_up == 1
+    assert (await row(factory, old)).llm_enrichment is LlmEnrichment.SKIPPED
+    assert (await row(factory, young)).llm_enrichment is LlmEnrichment.PENDING
+
+
+async def test_a_retried_job_gets_a_fresh_waiting_period_from_its_new_rules_phase(
+    factory: SessionFactory,
+) -> None:
+    """Given up long ago, retried, then the rules phase runs again: the wait starts over."""
+    long_ago = NOW - timedelta(days=40)
+    job_id = await add_job(
+        factory, NEEDS_STACK, created_at=long_ago, extracted_at=long_ago, **WAITING
+    )
+    await work(factory)  # given up
+    assert (await row(factory, job_id)).llm_enrichment is LlmEnrichment.SKIPPED
+    user_id = await owner_of(factory, job_id)
+    async with transaction(factory) as session:
+        await repository.reset_for_retry(session, user_id=user_id, job_id=job_id, max_retries=5)
+
+    assert (await work(factory)).gave_up == 0  # reset: not waiting for the model any more
+    ran = await extract_job(factory, job_id, settings=SETTINGS, now=NOW)  # rules run again
+    assert ran.outcome is ExtractionOutcome.AWAITING_MODEL
+
+    job = await row(factory, job_id)
+    assert job.llm_enrichment is LlmEnrichment.PENDING and job.extracted_at == NOW
+    assert (await work(factory, cooldown=FakeCooldown())).gave_up == 0  # created 40 days ago, kept
+    later = NOW + timedelta(days=SETTINGS.llm_enrichment_give_up_days, seconds=1)
+    result = await collect_work(factory, settings=SETTINGS, cooldown=None, now=later)
+    assert result.gave_up == 1  # and it is given up only after its own full period
+
+
 async def test_a_given_up_job_can_be_retried_by_its_owner(factory: SessionFactory) -> None:
     """The sweep's skipped state is exactly what the retry endpoint accepts."""
     job_id = await add_job(factory, NEEDS_STACK, created_at=TOO_OLD, **WAITING)

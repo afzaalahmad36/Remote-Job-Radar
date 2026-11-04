@@ -295,13 +295,22 @@ async def reset_for_retry(
 async def give_up_waiting(session: AsyncSession, *, older_than: datetime) -> int:
     """Stop waiting for the model for jobs that have waited since before `older_than`.
 
+    The wait starts when the rules phase made the job `pending` (`extracted_at`), not when the row
+    was created: a job that sat in the database before the pipeline ran must still get its full
+    waiting period. `created_at` is only the fallback when `extracted_at` is NULL. Every rules
+    write sets `extracted_at`, and a retry reset puts the job back to `not_needed`, so a retried
+    job starts a fresh wait when its new rules phase runs.
+
     One set-based UPDATE. The rules' data stays; a job that still has no title becomes failed,
     because nothing is left that could give it one. A worker finishing the same job at the same
     moment either wins (then this row no longer matches) or loses its compare-and-set.
     """
     statement = (
         update(Job)
-        .where(Job.llm_enrichment == LlmEnrichment.PENDING, Job.created_at < older_than)
+        .where(
+            Job.llm_enrichment == LlmEnrichment.PENDING,
+            func.coalesce(Job.extracted_at, Job.created_at) < older_than,
+        )
         .values(
             llm_enrichment=LlmEnrichment.SKIPPED,
             extraction_error=ExtractionError.GAVE_UP.value,
