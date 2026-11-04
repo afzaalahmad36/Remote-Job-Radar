@@ -22,6 +22,19 @@ from tests.fakes import UNREACHABLE_REDIS_URL, FakeFeedServer, FakeResolver, Fak
 from tests.task_helpers import celery_env, seed  # noqa: F401  (fixtures, registered for all tests)
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--reverse-order",
+        action="store_true",
+        help="run the collected tests in reverse order, to expose hidden test dependencies",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("--reverse-order"):
+        items.reverse()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _block_real_network() -> Iterator[None]:
     """Every test runs with outbound connections blocked (except the test DB): see the module."""
