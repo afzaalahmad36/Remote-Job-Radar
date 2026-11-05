@@ -25,7 +25,6 @@ from scripts.eval_clean_labels import (
     propose_for_post,
     rejoin_split_brackets,
     split_slash_products,
-    strip_brackets,
 )
 from scripts.eval_labelfile import LabelEntry, LabelFile, Labels, load_label_file, save_label_file
 
@@ -75,66 +74,132 @@ def names(post: int, stack: list[str]) -> list[str]:
     return [i.name for p in propose_for_post(post, stack) for i in p.items]
 
 
-# --- the rules ----------------------------------------------------------------------------------
+# --- the rules ---------------------------------------------------------------------------------
+
+
+def kept(post: int, stack: list[str]) -> list[str]:
+    """The entries that stay (flagged ones count as kept until the user answers)."""
+    return [i.name for p in propose_for_post(post, stack) for i in p.items if i.keep]
+
+
+def dropped(post: int, stack: list[str]) -> dict[str, str]:
+    return {
+        i.name: i.drop_reason
+        for p in propose_for_post(post, stack)
+        for i in p.items
+        if i.drop_reason
+    }
 
 
 @pytest.mark.parametrize(
-    ("before", "after"),
+    ("entry", "stays", "note"),
     [
-        ("Java (Primary)", "Java"),
-        ("Python (3.x) ", "Python"),
-        ("Kafka [streaming]", "Kafka"),
-        ("Go (Golang) (preferred)", "Go"),
-        ("AWS (SageMaker", "AWS"),  # a bracket that never closes is cut
-        ("EKS)", "EKS"),
-        ("Plain", "Plain"),
+        ("Java (Primary)", ["Java"], "annotation"),
+        ("Python (3.x) ", ["Python"], "version"),
+        ("Go (Bonus)", ["Go"], "annotation"),
+        ("Rust (preferred)", ["Rust"], "annotation"),
+        ("Docker (nice to have)", ["Docker"], "annotation"),
+        ("Kotlin (transitioning from Java to Kotlin)", ["Kotlin"], "annotation"),
+        ("Go (used for the backend services)", ["Go"], "clause"),
     ],
 )
-def test_trailing_annotations_in_brackets_are_stripped(before: str, after: str) -> None:
-    assert strip_brackets(before) == after
+def test_annotations_in_brackets_are_dropped_not_kept(
+    entry: str, stays: list[str], note: str
+) -> None:
+    assert kept(1, [entry]) == stays
+    assert note in dropped(1, [entry]).values()
 
 
-def test_a_bracket_split_by_a_comma_is_rejoined_then_stripped() -> None:
+def test_products_inside_brackets_become_separate_entries() -> None:
+    assert kept(1, ["AWS (SageMaker, EC2, EKS)"]) == ["AWS", "SageMaker", "EC2", "EKS"]
+
+
+def test_a_category_name_in_front_of_brackets_is_a_proposed_drop() -> None:
+    assert kept(1, ["Vector Databases (Milvus, Faiss)"]) == ["Milvus", "Faiss"]
+    assert dropped(1, ["Vector Databases (Milvus, Faiss)"]) == {"Vector Databases": "category name"}
+    for category in ("Cloud Platforms", "Cloud platforms", "Databases", "Frameworks"):
+        assert dropped(1, [f"{category} (Foo, Bar)"]) == {category: "category name"}
+
+
+def test_spaced_and_unspaced_slashes_inside_brackets_split() -> None:
+    assert kept(1, ["Cloud Platforms (AWS / GCP / Azure)"]) == ["AWS", "GCP", "Azure"]
+    assert kept(1, ["Node.js (NestJS/Express)"]) == ["Node.js", "NestJS", "Express"]
+
+
+def test_a_short_slash_name_inside_brackets_stays_whole() -> None:
+    assert kept(1, ["Tooling (CI/CD, TCP/IP)"]) == ["Tooling", "CI/CD", "TCP/IP"]
+
+
+def test_annotations_are_dropped_while_products_in_the_same_bracket_stay() -> None:
+    stack = ["Frameworks (Django, FastAPI, preferred)"]
+
+    assert kept(1, stack) == ["Django", "FastAPI"]
+    assert dropped(1, stack) == {"Frameworks": "category name", "preferred": "annotation"}
+
+
+def test_nested_brackets_are_walked_too() -> None:
+    assert kept(1, ["Cloud Platforms (AWS (EC2, S3), GCP)"]) == ["AWS", "GCP", "EC2", "S3"]
+
+
+def test_a_second_name_for_the_same_technology_is_a_duplicate() -> None:
+    assert kept(1, ["Go (Golang) (preferred)"]) == ["Go"]
+    assert dropped(1, ["Go (Golang) (preferred)"]) == {
+        "Golang": "duplicate",
+        "preferred": "annotation",
+    }
+
+
+def test_a_bracket_split_by_a_comma_is_rejoined_then_expanded() -> None:
     stack = ["Java", "AWS (SageMaker", "EKS)", "Redis"]
 
     assert rejoin_split_brackets(stack) == [["Java"], ["AWS (SageMaker", "EKS)"], ["Redis"]]
-    assert names(1, stack) == ["Java", "AWS", "Redis"]
-    rules = [p.rules for p in propose_for_post(1, stack)]
-    assert rules[1] == ["rejoin-brackets", "strip-brackets"]
+    assert kept(1, stack) == ["Java", "AWS", "SageMaker", "EKS", "Redis"]
+    joined = propose_for_post(1, stack)[1]
+    assert joined.before == "AWS (SageMaker, EKS)"
+    assert all("rejoin-brackets" in i.rules for i in joined.items)
 
 
-def test_a_bracket_that_never_closes_does_not_swallow_the_rest_silently() -> None:
+def test_a_bracket_that_never_closes_keeps_its_content_as_candidates() -> None:
     proposals = propose_for_post(1, ["Spark (batch", "Flink"])
 
-    assert [i.name for p in proposals for i in p.items] == ["Spark"]
+    assert [i.name for p in proposals for i in p.items] == ["Spark", "batch", "Flink"]
     assert proposals[0].before == "Spark (batch, Flink"  # shown in the table, so nothing is hidden
+    assert [i.flag for i in proposals[0].items] == [None, "unknown lowercase word", None]
+
+
+def test_a_stray_closing_bracket_is_ignored() -> None:
+    assert kept(1, ["EKS)"]) == ["EKS"]
 
 
 def test_slash_joined_products_are_split_only_when_spaced() -> None:
     assert split_slash_products("Terraform / Pulumi") == ["Terraform", "Pulumi"]
     assert split_slash_products("CI/CD") == ["CI/CD"]
-    assert names(1, ["Terraform / Pulumi"]) == ["Terraform", "Pulumi"]
-    assert propose_for_post(1, ["Terraform / Pulumi"])[0].rules == ["split-slash"]
+    assert kept(1, ["Terraform / Pulumi"]) == ["Terraform", "Pulumi"]
+    assert propose_for_post(1, ["Terraform / Pulumi"])[0].items[0].rules == ["split-slash"]
 
 
 def test_a_bare_product_name_is_left_alone() -> None:
     proposals = propose_for_post(1, ["Python", "PostgreSQL"])
 
-    assert [(p.changed, p.flagged, p.rules) for p in proposals] == [(False, False, [])] * 2
+    assert [(p.changed, p.flagged, p.items[0].rules) for p in proposals] == [(False, False, [])] * 2
 
 
 def test_duplicates_after_cleaning_are_dropped_once() -> None:
     proposals = propose_for_post(1, ["Java (Primary)", "java", "Java / Kotlin"])
 
-    assert [i.name for p in proposals for i in p.items] == ["Java", "Kotlin"]
-    assert "duplicate" in proposals[1].rules and "duplicate" in proposals[2].rules
-    assert proposals[1].changed
+    assert kept(1, ["Java (Primary)", "java", "Java / Kotlin"]) == ["Java", "Kotlin"]
+    assert proposals[1].items[0].drop_reason == "duplicate" and proposals[1].changed
+    assert proposals[2].items[0].drop_reason == "duplicate"
 
 
-def test_an_entry_with_nothing_left_is_dropped_by_rule() -> None:
-    proposals = propose_for_post(1, ["(Primary)", "Go"])
+def test_an_entry_that_is_only_a_note_leaves_nothing_behind() -> None:
+    assert kept(1, ["(Primary)", "Go"]) == ["Go"]
+    assert dropped(1, ["(Primary)", "Go"]) == {"Primary": "annotation"}
+    assert propose_for_post(1, ["(Primary)"])[0].changed
 
-    assert proposals[0].items == [] and "empty" in proposals[0].rules and proposals[0].changed
+
+def test_a_bare_category_name_is_a_proposed_drop_too() -> None:
+    assert kept(1, ["Databases", "PostgreSQL"]) == ["PostgreSQL"]
 
 
 # --- flagging: asked about, never guessed -------------------------------------------------------
@@ -214,14 +279,29 @@ def test_only_the_stack_changes_and_dropped_entries_are_removed() -> None:
     assert before == after  # ids, hashes, titles, companies, skipped posts: untouched
 
 
-def test_the_table_shows_before_after_and_rule_for_changed_rows_only() -> None:
-    proposals = build_proposals(make_file(["Java (Primary)", "Python", "Cloud architecture"]))
+def table_rows(stack: list[str]) -> list[list[str]]:
+    """The table as cells: post, before, after, rule (columns are separated by two spaces)."""
+    table = format_table(build_proposals(make_file(stack)))
+    return [[c.strip() for c in line.split("  ") if c.strip()] for line in table.splitlines()[2:]]
 
-    table = format_table(proposals)
 
-    lines = table.splitlines()
-    assert lines[0].split() == ["post", "before", "after", "rule"]
-    assert "Java (Primary)" in lines[2] and "strip-brackets" in lines[2]
+def test_the_table_has_a_row_for_every_candidate_and_says_what_happened() -> None:
+    rows = table_rows(["Vector Databases (Milvus, Faiss, preferred)"])
+
+    assert [row[-2] for row in rows] == ["Vector Databases", "Milvus", "Faiss", "preferred"]
+    assert rows[0][:2] == ["1", "Vector Databases (Milvus, Faiss, preferred)"]
+    assert "DROP (category name)" in rows[0][-1] and "brackets-removed" in rows[0][-1]
+    assert rows[1][-1] == "bracket-content" and rows[2][-1] == "bracket-content"
+    assert rows[3][-1] == "bracket-content, DROP (annotation)"
+    assert all(len(row) == 2 for row in rows[1:])  # before and post are shown once per group
+
+
+def test_the_table_header_and_flags() -> None:
+    table = format_table(
+        build_proposals(make_file(["Java (Primary)", "Python", "Cloud architecture"]))
+    )
+
+    assert table.splitlines()[0].split() == ["post", "before", "after", "rule"]
     assert "ASK: looks like a concept" in table
     assert "Python" not in table  # already clean: counted, not listed
 
@@ -282,7 +362,8 @@ def test_confirmed_run_backs_up_first_writes_the_clean_labels_and_lints_clean(
     assert clean.run(labels_path, session) == 0
 
     assert (labels_path.parent / "labels.raw.json").read_bytes() == original
-    assert stacks(labels_path) == [["Java", "AWS", "Terraform", "Pulumi"], ["Go"]]
+    first_post = ["Java", "AWS", "SageMaker", "EKS", "Terraform", "Pulumi"]
+    assert stacks(labels_path) == [first_post, ["Go"]]
     assert "Lint problems after: 0" in output[-1]
     assert "Cloud architecture" in questions[0]
     assert not list(labels_path.parent.glob("*.tmp"))

@@ -45,8 +45,39 @@ GENERIC_WORDS = frozenset(
     """.split()
 )
 
-_BRACKET_GROUP = re.compile(r"\s*[(\[][^()\[\]]*[)\]]")
+# Names of a kind of thing, written in front of the products ("Vector Databases (Milvus, Faiss)").
+# The category is proposed for dropping; the products in the brackets are kept as entries.
+CATEGORY_NAMES = frozenset(
+    {
+        "database",
+        "databases",
+        "vector database",
+        "vector databases",
+        "cloud platform",
+        "cloud platforms",
+        "cloud service",
+        "cloud services",
+        "cloud provider",
+        "cloud providers",
+        "framework",
+        "frameworks",
+        "language",
+        "languages",
+        "programming language",
+        "programming languages",
+        "library",
+        "libraries",
+    }
+)
+
+# Words written in brackets about the skill level, not about a technology.
+ANNOTATION_WORDS = frozenset(
+    "primary secondary bonus preferred optional desired required mandatory plus advantage".split()
+)
+_ANNOTATION_PREFIXES = ("nice to have", "a plus", "transitioning")
+_VERSION = re.compile(r"v?\d[\d.x+]*")
 _SPACED_SLASH = re.compile(r"\s+/\s+")
+_ANY_SLASH = re.compile(r"\s*/\s*")
 _SENTENCE_PUNCTUATION = re.compile(r"[.!?;:](\s|$)")
 _BRACKETS = "()[]{}"
 _EDGE_JUNK = " \t.,;:-"
@@ -54,27 +85,41 @@ _EDGE_JUNK = " \t.,;:-"
 
 @dataclass
 class Item:
-    """One proposed stack entry. `flag` is why the human is asked; `keep` is their answer."""
+    """One candidate entry. `rules` say what happened to it.
+
+    `drop_reason` is set when the script proposes dropping it (category name, annotation,
+    duplicate); `flag` is why the human is asked; `keep` is the human's answer.
+    """
 
     name: str
     flag: str | None = None
     keep: bool = True
+    rules: list[str] = field(default_factory=list)
+    drop_reason: str | None = None
+
+    def rule_text(self) -> str:
+        parts = list(self.rules)
+        if self.drop_reason:
+            parts.append(f"DROP ({self.drop_reason})")
+        if self.flag:
+            parts.append(f"ASK: {self.flag}")
+        return ", ".join(parts) or "kept"
 
 
 @dataclass
 class Proposal:
-    """What one original entry (or several, rejoined) becomes."""
+    """What one original entry (or several, rejoined) becomes: one item per candidate."""
 
     post: int  # 1-based position among the labelled posts
     before: str
     items: list[Item]
-    rules: list[str]
 
     @property
     def changed(self) -> bool:
-        return [i.name for i in self.items] != [self.before] or any(
-            rule in ("duplicate", "empty") for rule in self.rules
-        )
+        if len(self.items) != 1:
+            return True
+        item = self.items[0]
+        return item.name != self.before or bool(item.rules) or item.drop_reason is not None
 
     @property
     def flagged(self) -> bool:
@@ -141,16 +186,64 @@ def rejoin_split_brackets(entries: Sequence[str]) -> list[list[str]]:
     return groups
 
 
-def strip_brackets(text: str) -> str:
-    """Remove bracketed annotations, then any bracket left unbalanced ("AWS (SageMaker")."""
-    previous = None
-    while previous != text:
-        previous = text
-        text = _BRACKET_GROUP.sub("", text)
-    for opener in "([":
-        if opener in text:
-            text = text[: text.index(opener)]
-    return text.replace(")", "").replace("]", "").strip()
+def scan_brackets(text: str) -> tuple[str, list[str]]:
+    """Split `text` into what is outside any bracket and the content of each outermost group.
+
+    A bracket that never closes keeps its content (everything after the opener); a closer with
+    no opener is ignored.
+    """
+    outside: list[str] = []
+    inside: list[str] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(text):
+        if char in "([":
+            if depth == 0:
+                start = index + 1
+            depth += 1
+        elif char in ")]":
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    inside.append(text[start:index])
+        elif depth == 0:
+            outside.append(char)
+    if depth > 0:
+        inside.append(text[start:])
+    return "".join(outside), inside
+
+
+def _split_bracket_piece(piece: str) -> list[str]:
+    """Split on a slash with no spaces too ("NestJS/Express"), unless a side is under 3 letters.
+
+    The size check keeps "CI/CD" and "TCP/IP" whole. It is a heuristic: anything it splits wrongly
+    shows up in the table.
+    """
+    if _SPACED_SLASH.search(piece):
+        return _SPACED_SLASH.split(piece)
+    sides = _ANY_SLASH.split(piece)
+    return sides if len(sides) > 1 and all(len(side) >= 3 for side in sides) else [piece]
+
+
+def bracket_candidates(content: str) -> list[str]:
+    """Separate candidate entries from the content of a bracket: split on commas and slashes."""
+    outer, nested = scan_brackets(content)
+    pieces = [part for piece in outer.split(",") for part in _split_bracket_piece(piece)]
+    for group in nested:
+        pieces.extend(bracket_candidates(group))
+    return pieces
+
+
+def annotation_reason(name: str) -> str | None:
+    """Why bracket text is a note about the skill, not a technology (None = it may be one)."""
+    folded = name.casefold()
+    if folded in ANNOTATION_WORDS or folded.startswith(_ANNOTATION_PREFIXES):
+        return "annotation"
+    if _VERSION.fullmatch(folded):
+        return "version"
+    if len(name.split()) > MAX_ENTRY_WORDS:
+        return "clause"
+    return None
 
 
 def split_slash_products(text: str) -> list[str]:
@@ -172,9 +265,28 @@ def flag_reason(name: str) -> str | None:
     words = name.split()
     if any(word.casefold().strip(".,") in GENERIC_WORDS for word in words):
         return "looks like a concept"
-    if len(words) > 1 and name == name.casefold():
-        return "looks like a description"
+    if name == name.casefold():  # a lowercase name the dictionary does not know
+        return "looks like a description" if len(words) > 1 else "unknown lowercase word"
     return None
+
+
+def _key(name: str) -> str:
+    """Two spellings of one technology ("Go", "Golang") share a key, so only one is kept."""
+    return (canonical_name(name) or name).casefold()
+
+
+def _judge(name: str, bracketed: bool, rules: list[str], seen: set[str]) -> Item:
+    item = Item(name, rules=rules)
+    if name.casefold() in CATEGORY_NAMES:
+        item.keep, item.drop_reason = False, "category name"
+    elif bracketed and (reason := annotation_reason(name)):
+        item.keep, item.drop_reason = False, reason
+    elif _key(name) in seen:
+        item.keep, item.drop_reason = False, "duplicate"
+    else:
+        seen.add(_key(name))
+        item.flag = flag_reason(name)
+    return item
 
 
 def propose_for_post(post: int, stack: Sequence[str]) -> list[Proposal]:
@@ -182,23 +294,15 @@ def propose_for_post(post: int, stack: Sequence[str]) -> list[Proposal]:
     seen: set[str] = set()
     for group in rejoin_split_brackets(stack):
         before = ", ".join(group)
-        rules = ["rejoin-brackets"] if len(group) > 1 else []
-        without = strip_brackets(before)
-        if without != before.strip():
-            rules.append("strip-brackets")
-        parts = [tidy(part) for part in split_slash_products(without)]
-        if len(parts) > 1:
-            rules.append("split-slash")
-        items = []
-        for part in parts:
-            if not part:
-                rules.append("empty")
-            elif part.casefold() in seen:
-                rules.append("duplicate")
-            else:
-                seen.add(part.casefold())
-                items.append(Item(part, flag_reason(part)))
-        proposals.append(Proposal(post, before, items, rules))
+        lead = ["rejoin-brackets"] if len(group) > 1 else []
+        outside, groups = scan_brackets(before)
+        top = [tidy(part) for part in split_slash_products(outside)]
+        inner = [tidy(p) for content in groups for p in bracket_candidates(content)]
+        top_rules = lead + (["brackets-removed"] if groups else [])
+        top_rules += ["split-slash"] if len([t for t in top if t]) > 1 else []
+        items = [_judge(n, False, list(top_rules), seen) for n in top if n]
+        items += [_judge(n, True, [*lead, "bracket-content"], seen) for n in inner if n]
+        proposals.append(Proposal(post, before, items))
     return proposals
 
 
@@ -245,14 +349,17 @@ def _require_only_stacks_changed(before: LabelFile, after: LabelFile) -> None:
 
 
 def format_table(proposals: Sequence[Proposal]) -> str:
+    """One row per candidate entry, with the original text on the first row of its group."""
     rows = [("post", "before", "after", "rule")]
     for p in proposals:
         if not (p.changed or p.flagged):
             continue
-        after = " ; ".join(i.name for i in p.items) or "(dropped)"
-        rule = ", ".join(p.rules)
-        flags = "; ".join(f"ASK: {i.flag}" for i in p.items if i.flag)
-        rows.append((str(p.post), p.before, after, ", ".join(x for x in (rule, flags) if x)))
+        if not p.items:
+            rows.append((str(p.post), p.before, "(nothing)", "DROP (empty)"))
+        for position, item in enumerate(p.items):
+            first = position == 0
+            lead = (str(p.post), p.before) if first else ("", "")
+            rows.append((*lead, item.name, item.rule_text()))
     widths = [max(len(row[col]) for row in rows) for col in range(4)]
     lines = [
         "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True))
