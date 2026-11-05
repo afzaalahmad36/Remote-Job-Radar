@@ -1,0 +1,55 @@
+# Lists for `eval_clean_labels.py --policy`. Names are compared case-insensitively.
+# A name may not be on `allow` and on a drop list at the same time.
+
+# Known products the stack dictionary (app/extraction/stack.py) lacks: kept.
+allow = [
+    "Decagon",
+    "Ada",
+    "Kore.ai",
+    "CoreML",
+    "LiteRT",
+    "TFLite",
+    "Milvus",
+    "Faiss",
+    "Karpenter",
+    "Pulumi",
+    "Confluent Platform",
+    "Kafka Streams",
+    "Google CCAI",
+    "Amazon Lex",
+    "SageMaker",
+    "EKS",
+    "EC2",
+]
+
+# Techniques, practices and fields, not products: dropped.
+deny = [
+    "LLMs",
+    "LLM",
+    "RAG",
+    "MLOps",
+    "Deep Learning",
+    "OSINT",
+    "IaC",
+    "CI/CD",
+    # Process frameworks and sales methods: a method, not a technology.
+    "Agile",
+    "Scrum",
+    "Kanban",
+    "Challenger",
+    "MEDDPICC",
+    "Command of the Message",
+]
+
+# Pieces of a sentence that are not an entry: dropped. (Anything starting with "and " or "or "
+# is dropped without being listed here.)
+fragments = [
+    "Connect",
+    "Retrieval",
+    "AWS-first",
+    "3DS",
+    "TIPs",
+    "real-time",
+    "batch models",
+    "abuse",
+]

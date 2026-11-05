@@ -190,6 +190,13 @@ CI never labels or scores real posts, and the scoring never makes a provider req
 Salary follows the rules' conventions: a single amount is min = max, "up to X" is max only, "from X"
 or "X+" is min only.
 
+**What counts as a stack label.** An entry counts only if it is the name of a product, language,
+framework, library, database, cloud service or protocol that someone would list on a CV. Practices,
+methods, domains, standards (SOC 2, ISO 27001) and abstract nouns are excluded, and the lists in
+`scripts/eval_clean_policy.toml` encode the borderline calls (`scripts/eval_clean_labels.py --policy`
+applies them). The lists were fixed before scoring and without looking at any extraction: the cleaner
+reads only the labels file.
+
 **Two outputs are scored the same way:** the stored extraction (the job's database columns) and the
 rules recomputed offline from `raw_text`.
 

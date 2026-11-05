@@ -10,6 +10,12 @@ rewrite as a table (before, after, rule), ask keep/drop for each entry that is n
 product, then ask for a final yes before writing anything.
 
     uv run python -m scripts.eval_clean_labels
+
+With `--policy` nothing is asked per entry: every entry that would be asked about gets a proposed
+keep or drop from the rule in `eval_clean_policy.py` (lists in `eval_clean_policy.toml`), the reason
+is shown in the table, and the one final "Write these changes?" question remains.
+
+    uv run python -m scripts.eval_clean_labels --policy
 """
 
 import argparse
@@ -22,6 +28,7 @@ from pathlib import Path
 
 from app.extraction.stack import canonical_name
 from scripts.db_guard import ScriptError
+from scripts.eval_clean_policy import DEFAULT_POLICY_PATH, Policy, decide, load_policy
 from scripts.eval_labelfile import (
     DEFAULT_LABELS_PATH,
     LabelEntry,
@@ -88,7 +95,8 @@ class Item:
     """One candidate entry. `rules` say what happened to it.
 
     `drop_reason` is set when the script proposes dropping it (category name, annotation,
-    duplicate); `flag` is why the human is asked; `keep` is the human's answer.
+    duplicate, policy); `note` is why the policy keeps it; `flag` is why the human is asked;
+    `keep` is the proposal or the human's answer.
     """
 
     name: str
@@ -96,11 +104,14 @@ class Item:
     keep: bool = True
     rules: list[str] = field(default_factory=list)
     drop_reason: str | None = None
+    note: str | None = None
 
     def rule_text(self) -> str:
         parts = list(self.rules)
         if self.drop_reason:
             parts.append(f"DROP ({self.drop_reason})")
+        if self.note:
+            parts.append(f"KEEP ({self.note})")
         if self.flag:
             parts.append(f"ASK: {self.flag}")
         return ", ".join(parts) or "kept"
@@ -119,7 +130,12 @@ class Proposal:
         if len(self.items) != 1:
             return True
         item = self.items[0]
-        return item.name != self.before or bool(item.rules) or item.drop_reason is not None
+        return (
+            item.name != self.before
+            or bool(item.rules)
+            or item.drop_reason is not None
+            or item.note is not None
+        )
 
     @property
     def flagged(self) -> bool:
@@ -369,6 +385,30 @@ def format_table(proposals: Sequence[Proposal]) -> str:
     return "\n".join(line.rstrip() for line in lines)
 
 
+def apply_policy(proposals: Sequence[Proposal], policy: Policy) -> tuple[int, int]:
+    """Propose keep or drop for entries the policy decides; none of them is asked about after.
+
+    Returns (kept, dropped) counts of the entries it decided. Entries already dropped by a rule
+    (category name, annotation, duplicate) are left as they are.
+    """
+    kept = dropped = 0
+    for proposal in proposals:
+        for item in proposal.items:
+            if not item.keep:
+                continue
+            decision = decide(item.name, item.flag, policy)
+            if decision is None:
+                continue
+            item.flag = None
+            if decision.keep:
+                item.note = decision.reason
+                kept += 1
+            else:
+                item.keep, item.drop_reason = False, decision.reason
+                dropped += 1
+    return kept, dropped
+
+
 def ask_keep_or_drop(proposals: Sequence[Proposal], ask: Callable[[str], str]) -> bool:
     """Ask about each flagged entry. False when the user quits (nothing is written then)."""
     flagged = [(p, i) for p in proposals for i in p.items if i.flag]
@@ -406,6 +446,17 @@ def build_parser() -> argparse.ArgumentParser:
         prog="eval_clean_labels", description="Tidy the stack labels before scoring."
     )
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS_PATH)
+    parser.add_argument(
+        "--policy",
+        action="store_true",
+        help="propose keep or drop for every entry that would be asked about, and ask nothing",
+    )
+    parser.add_argument(
+        "--policy-file",
+        type=Path,
+        default=None,
+        help=f"allow, deny and fragment lists for --policy (default: {DEFAULT_POLICY_PATH.name})",
+    )
     return parser
 
 
@@ -415,7 +466,7 @@ class Session:
     out: Callable[[str], None] = field(default=print)
 
 
-def run(labels_path: Path, session: Session) -> int:
+def run(labels_path: Path, session: Session, policy: Policy | None = None) -> int:
     if not labels_path.is_file():
         raise ScriptError(f"{labels_path} does not exist")
     label_file = load_label_file(labels_path)
@@ -423,6 +474,9 @@ def run(labels_path: Path, session: Session) -> int:
     session.out(f"Backup: {backup} ({'written' if created else 'already there, kept as it is'})")
 
     proposals = build_proposals(label_file)
+    if policy is not None:
+        kept, dropped_by_policy = apply_policy(proposals, policy)
+        session.out(f"Policy: {kept} entries kept and {dropped_by_policy} dropped by the lists.")
     issues_before = lint_file(label_file)
     if not any(p.changed or p.flagged for p in proposals):
         session.out(f"Nothing to clean ({len(issues_before)} lint problems).")
@@ -436,7 +490,7 @@ def run(labels_path: Path, session: Session) -> int:
             session.out("Stopped. Nothing was changed.")
             return 1
         dropped = sum(not i.keep for p in proposals for i in p.items)
-        answer = session.ask(f"Write these changes ({dropped} flagged entries dropped)? [y/N] ")
+        answer = session.ask(f"Write these changes ({dropped} entries dropped)? [y/N] ")
     except EOFError:
         session.out("\nInput ended. Nothing was changed.")
         return 1
@@ -454,9 +508,13 @@ def run(labels_path: Path, session: Session) -> int:
 
 
 def main(argv: Sequence[str] | None = None, session: Session | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.policy_file is not None and not args.policy:
+        parser.error("--policy-file only makes sense together with --policy")
     try:
-        return run(args.labels, session or Session())
+        policy = load_policy(args.policy_file or DEFAULT_POLICY_PATH) if args.policy else None
+        return run(args.labels, session or Session(), policy)
     except ScriptError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
