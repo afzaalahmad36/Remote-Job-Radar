@@ -28,6 +28,47 @@ allow = [
     "Node.js",
     "NestJS",
     "Express",
+    "Expo",
+    "Prisma",
+    "Maven",
+    "JAX",
+    "OpenCV",
+    "Pillow",
+    "TensorRT",
+    "ONNX",
+    "Vite",
+    "Databricks",
+    "Trino",
+    "ClickHouse",
+    "Tinybird",
+    "Apache Arrow",
+    "Parquet",
+    "Apache Iceberg",
+    "Apache Airflow",
+    "Hadoop",
+    "AWS CloudFormation",
+    "OpenTelemetry",
+    "Datadog",
+    "Gainsight",
+    "Looker",
+    "Active Directory",
+    "Bash",
+    "OAuth2",
+    "OpenID Connect",
+    "SAML",
+    "LDAP",
+    "SCIM",
+    "SSO",
+    "SOAP",
+    "JSON",
+    "XML",
+    "Salesforce",
+    "Snowflake",
+    "Avro",
+    "Sierra Agent Studio",
+    "Microsoft Office",
+    "Framer",
+    "Heroku",
 ]
 
 # Techniques, practices, methods and non-engineering tools, not stack products: dropped.
@@ -46,6 +87,7 @@ deny = [
     "Product",
     "Marketing",
     "CRM",
+    "Distributed Query Engines",
     # Process frameworks and sales methods: a method, not a technology.
     "Agile",
     "Scrum",
@@ -71,4 +113,9 @@ fragments = [
 # Another spelling of a known product. It is kept under the name on the right, so it is a
 # duplicate of that name when the post lists both.
 [aliases]
+"Microsoft Office Suite" = "Microsoft Office"
 "Google Cloud Platform" = "GCP"
+# A name for several products is split into them, each decided on its own.
+"React Vite" = ["React", "Vite"]
+"Apache Kafka & Kafka Ecosystem" = "Kafka"
+"Apache Parquet" = "Parquet"

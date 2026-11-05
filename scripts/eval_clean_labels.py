@@ -1,9 +1,9 @@
 """One-off helper: tidy the stack labels in `.local/eval/labels.json` before scoring.
 
 Run by hand, never by CI or app code. It reads and writes only the labels file; it does not touch
-the database, any stored extraction or any provider. It changes the `stack` list of each labelled
-post and nothing else (ids, hashes, titles, companies, salary, remote policy and seniority stay
-byte-for-byte as they were).
+the database, any stored extraction or any provider.
+Cleaning changes the `stack` list of each labelled post and nothing else (ids, hashes, titles,
+companies, salary, remote policy and seniority stay byte-for-byte as they were).
 
 Order of events: copy `labels.json` to `labels.raw.json` (never overwritten), show every proposed
 rewrite as a table (before, after, rule), ask keep/drop for each entry that is not clearly a named
@@ -29,7 +29,15 @@ from pathlib import Path
 
 from app.extraction.stack import canonical_name
 from scripts.db_guard import ScriptError
-from scripts.eval_clean_policy import DEFAULT_POLICY_PATH, Policy, decide, load_policy
+from scripts.eval_clean_policy import (
+    DEFAULT_POLICY_PATH,
+    Policy,
+    decide,
+    expand,
+    is_known,
+    load_policy,
+    normal,
+)
 from scripts.eval_labelfile import (
     DEFAULT_LABELS_PATH,
     LabelEntry,
@@ -386,18 +394,32 @@ def format_table(proposals: Sequence[Proposal]) -> str:
     return "\n".join(line.rstrip() for line in lines)
 
 
+def _expanded(items: Sequence[Item], policy: Policy) -> list[Item]:
+    """Replace each entry that glues products together ("AWS or GCP", "React Vite") by its parts."""
+    result: list[Item] = []
+    for item in items:
+        parts = expand(item.name, policy) if item.keep else [(item.name, ())]
+        if len(parts) == 1 and not parts[0][1]:
+            result.append(item)
+        else:
+            result.extend(Item(name, rules=[*item.rules, *rules]) for name, rules in parts)
+    return result
+
+
 def apply_policy(proposals: Sequence[Proposal], policy: Policy) -> tuple[int, int]:
     """Propose keep or drop for every remaining entry; nothing is asked about afterwards.
 
     Returns (kept, dropped) counts of the entries it decided. Entries already dropped by a rule
-    (category name, annotation, duplicate) are left as they are. A name the policy rewrote ("and
-    AWS" is "AWS", an alias becomes its canonical name) is checked against the other kept entries
-    of the same post, so it cannot appear twice.
+    (category name, annotation, duplicate) are left as they are. An entry that glues products
+    together is split first. A name the policy rewrote ("and AWS" is "AWS", an alias becomes its
+    canonical name) is checked against the other kept entries of the same post, so it cannot appear
+    twice.
     """
     kept = dropped = 0
     seen: dict[int, set[str]] = {}
     for proposal in proposals:
         post_seen = seen.setdefault(proposal.post, set())
+        proposal.items = _expanded(proposal.items, policy)
         for item in proposal.items:
             if not item.keep:
                 continue
@@ -417,6 +439,56 @@ def apply_policy(proposals: Sequence[Proposal], policy: Policy) -> tuple[int, in
                 item.keep, item.drop_reason = False, decision.reason
                 dropped += 1
     return kept, dropped
+
+
+_CAPITALISED_WORD = re.compile(r"[A-Za-z][A-Za-z0-9.+#-]*")
+_SMALL_WORDS = frozenset(
+    {"and", "or", "the", "of", "for", "with", "in", "to", "a", "an", "on", "as"}
+)
+SUMMARY_LIMIT = 40
+# Ordinary words the scan skips so product names stand out (it does not affect any decision).
+ENGLISH_WORDS = frozenset(
+    """
+    cloud data model systems tools analysis production security standards evaluation learning
+    machine platforms processing stores web infrastructure
+    """.split()
+)
+SCAN_FILE_NAME = "policy_scan.txt"
+
+
+def uncovered_words_summary(
+    proposals: Sequence[Proposal], policy: Policy, limit: int | None = SUMMARY_LIMIT
+) -> list[str]:
+    """Lines listing capitalised words in dropped entries that no list or dictionary covers.
+
+    Only entries dropped as "not a known product" count, and plain English words (ENGLISH_WORDS)
+    are left out so real product names stand out. The point is a quick scan for real products the
+    lists lack: add a real one to `allow` and run again. `limit=None` lists every word.
+    """
+    entries: dict[str, list[str]] = {}
+    for proposal in proposals:
+        for item in proposal.items:
+            if item.drop_reason != "not a known product":
+                continue
+            for word in _CAPITALISED_WORD.findall(item.name):
+                key = normal(word)
+                covered = is_known(word, policy) or key in policy.deny or key in policy.fragments
+                plain = key in _SMALL_WORDS or key in ENGLISH_WORDS
+                if word[0].isupper() and not plain and not covered:
+                    if item.name not in entries.setdefault(word, []):
+                        entries[word].append(item.name)
+    if not entries:
+        return []
+    ranked = sorted(entries.items(), key=lambda pair: (-len(pair[1]), pair[0].casefold()))
+    lines = [
+        "Dropped as 'not a known product' with a capitalised word no list covers (scan these):"
+    ]
+    shown = ranked if limit is None else ranked[:limit]
+    for word, names in shown:
+        lines.append(f"  {word} ({len(names)}): {', '.join(names[:3])}")
+    if len(shown) < len(ranked):
+        lines.append(f"  ... and {len(ranked) - len(shown)} more words")
+    return lines
 
 
 def ask_keep_or_drop(proposals: Sequence[Proposal], ask: Callable[[str], str]) -> bool:
@@ -492,6 +564,18 @@ def run(labels_path: Path, session: Session, policy: Policy | None = None) -> in
         session.out(f"Nothing to clean ({len(issues_before)} lint problems).")
         return 0 if not issues_before else 1
     session.out(format_table(proposals))
+    if policy is not None:
+        summary = uncovered_words_summary(proposals, policy)
+        if summary:
+            scan_path = labels_path.with_name(SCAN_FILE_NAME)
+            full = uncovered_words_summary(proposals, policy, limit=None)
+            scan_path.write_text("\n".join(full) + "\n", encoding="utf-8")
+            session.out("")
+            for line in summary:
+                session.out(line)
+            session.out(f"Every such word is in {scan_path}")
+        else:  # do not leave an older scan behind to be mistaken for this run's
+            labels_path.with_name(SCAN_FILE_NAME).unlink(missing_ok=True)
     unchanged = sum(not (p.changed or p.flagged) for p in proposals)
     session.out(f"\n{unchanged} entries already clean. Lint problems now: {len(issues_before)}.")
 

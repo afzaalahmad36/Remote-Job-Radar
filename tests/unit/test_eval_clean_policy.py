@@ -16,6 +16,8 @@ from scripts.eval_clean_policy import (
     Decision,
     Policy,
     decide,
+    expand,
+    is_known,
     load_policy,
     normal,
     strip_leading,
@@ -25,10 +27,10 @@ from tests.unit.test_eval_clean_labels import make_file, scripted, stacks
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 POLICY = Policy(
-    allow=frozenset({"zorbo", "acme engine", "faiss"}),
+    allow=frozenset({"zorbo", "acme engine", "faiss", "vite"}),
     deny=frozenset({"rag", "ci/cd", "deep learning"}),
     fragments=frozenset({"connect", "batch models"}),
-    aliases={"google cloud platform": "GCP"},
+    aliases={"google cloud platform": ("GCP",), "react vite": ("React", "Vite")},
 )
 AND = "stripped 'and'"
 
@@ -162,6 +164,7 @@ def test_the_shipped_lists_load_and_hold_the_agreed_names() -> None:
     denied = (
         "LLMs", "RAG", "MLOps", "Deep Learning", "OSINT", "IaC", "CI/CD", "Infrastructure as Code",
         "Retrieval-Augmented Generation", "Wrike", "Product", "Marketing", "CRM",
+        "Distributed Query Engines",
         "Agile", "Scrum", "Kanban", "Challenger", "MEDDPICC", "Command of the Message",
     )  # fmt: skip
     for name in denied:
@@ -170,7 +173,13 @@ def test_the_shipped_lists_load_and_hold_the_agreed_names() -> None:
         assert normal(name) in policy.fragments
     assert "batch models" in policy.fragments
     assert "meddpicc" not in policy.allow
-    assert policy.aliases == {"google cloud platform": "GCP"}
+    assert policy.aliases == {
+        "google cloud platform": ("GCP",),
+        "react vite": ("React", "Vite"),
+        "apache kafka & kafka ecosystem": ("Kafka",),
+        "apache parquet": ("Parquet",),
+        "microsoft office suite": ("Microsoft Office",),
+    }
 
 
 def test_the_shipped_lists_decide_the_agreed_examples() -> None:
@@ -213,8 +222,10 @@ def test_the_shipped_lists_decide_the_agreed_examples() -> None:
         ('allowed = ["x"]', "unknown key"),
         ('allow = "x"', "must be a list of strings"),
         ("deny = [1]", "must be a list of strings"),
-        ('aliases = "x"', "must map names to names"),
-        ("[aliases]\nfoo = 1\n", "must map names to names"),
+        ('aliases = "x"', "must map names to a name or a non-empty list"),
+        ("[aliases]\nfoo = 1\n", "must map names to a name or a non-empty list"),
+        ("[aliases]\nfoo = []\n", "must map names to a name or a non-empty list"),
+        ("[aliases]\nfoo = [1]\n", "must map names to a name or a non-empty list"),
     ],
 )
 def test_a_bad_lists_file_is_reported(tmp_path: Path, text: str, message: str) -> None:
@@ -235,6 +246,13 @@ def test_empty_lists_are_allowed(tmp_path: Path) -> None:
     path.write_text("", encoding="utf-8")
 
     assert load_policy(path) == Policy(frozenset(), frozenset(), frozenset(), {})
+
+
+def test_an_alias_may_name_one_product_or_several(tmp_path: Path) -> None:
+    path = tmp_path / "policy.toml"
+    path.write_text('[aliases]\n"A B" = "AB"\n"C D" = ["C", "D"]\n', encoding="utf-8")
+
+    assert load_policy(path).aliases == {"a b": ("AB",), "c d": ("C", "D")}
 
 
 # --- applying it to proposals and the table -------------------------------------------------------
@@ -354,6 +372,259 @@ def test_an_entry_already_dropped_by_a_rule_is_not_decided_again() -> None:
 
     primary = proposals[0].items[1]
     assert primary.drop_reason == "annotation" and primary.note is None
+
+
+# --- entries that glue products together ----------------------------------------------------------
+
+SPLIT = "split '/'"
+OR = "split 'or'"
+
+
+@pytest.mark.parametrize(
+    ("name", "parts"),
+    [
+        ("React Vite", [("React", ("split alias",)), ("Vite", ("split alias",))]),
+        ("and React Vite", [("React", (AND, "split alias")), ("Vite", (AND, "split alias"))]),
+        ("AWS/Cloud Infrastructure", [("AWS", (SPLIT,)), ("Cloud Infrastructure", (SPLIT,))]),
+        ("Docker/Kubernetes", [("Docker", (SPLIT,)), ("Kubernetes", (SPLIT,))]),
+        ("Zorbo/Quuxdb", [("Zorbo", (SPLIT,)), ("Quuxdb", (SPLIT,))]),  # one side is enough
+        ("AWS/GCP/Azure", [("AWS", (SPLIT,)), ("GCP", (SPLIT,)), ("Azure", (SPLIT,))]),
+        ("AWS or GCP", [("AWS", (OR,)), ("GCP", (OR,))]),
+        ("aws OR Zorbo", [("aws", (OR,)), ("Zorbo", (OR,))]),
+        (
+            "strong AWS/GCP",
+            [("AWS", ("stripped 'strong'", SPLIT)), ("GCP", ("stripped 'strong'", SPLIT))],
+        ),
+    ],
+)
+def test_an_entry_that_glues_products_together_is_split(
+    name: str, parts: list[tuple[str, tuple[str, ...]]]
+) -> None:
+    assert expand(name, POLICY) == parts
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "CI/CD",  # on the deny-list as written
+        "Quuxdb/Frobnicate",  # no side is a known product
+        "AWS or Quuxdb",  # " or " needs two known products
+        "Quuxdb or Frobnicate",
+        "AWS/",
+        "/AWS",
+        "Python",
+        "Zorbo",
+        "Google Cloud Platform",  # a single-product alias is not split
+        "and",
+    ],
+)
+def test_an_entry_that_is_not_a_glued_pair_comes_back_untouched(name: str) -> None:
+    assert expand(name, POLICY) == [(name, ())]
+
+
+def test_a_known_name_with_a_slash_in_the_dictionary_is_not_split() -> None:
+    assert expand("Node.js", POLICY) == [("Node.js", ())]
+    assert is_known("Zorbo", POLICY) and is_known("Google Cloud Platform", POLICY)
+    assert is_known("Python", POLICY) and not is_known("Quuxdb", POLICY)
+
+
+def test_split_parts_are_decided_one_by_one() -> None:
+    proposals = proposals_after_policy(["AWS/Cloud Infrastructure", "React Vite"])
+
+    items = [i for p in proposals for i in p.items]
+    assert [(i.name, i.keep, i.drop_reason, i.note) for i in items] == [
+        ("AWS", True, None, "dictionary"),
+        ("Cloud Infrastructure", False, "not a known product", None),
+        ("React", True, None, "dictionary"),
+        ("Vite", True, None, "allow-list"),
+    ]
+
+
+def test_split_parts_dedupe_against_the_rest_of_the_post() -> None:
+    assert kept(["AWS", "AWS or GCP", "react vite", "Vite"]) == ["AWS", "GCP", "React", "Vite"]
+
+
+def test_the_table_shows_the_split_in_the_rule_column() -> None:
+    table = format_table(proposals_after_policy(["AWS/Cloud Infrastructure", "AWS or GCP"]))
+
+    assert "split '/', KEEP (dictionary)" in table
+    assert "split '/', DROP (not a known product)" in table
+    assert "split 'or', KEEP (dictionary)" in table
+
+
+# --- the shipped lists ----------------------------------------------------------------------------
+
+ADDED_PRODUCTS = (
+    "Expo, Prisma, Maven, JAX, OpenCV, Pillow, TensorRT, ONNX, Vite, Databricks, Trino, "
+    "ClickHouse, Tinybird, Apache Arrow, Parquet, Apache Iceberg, Apache Airflow, Hadoop, "
+    "AWS CloudFormation, "
+    "OpenTelemetry, Datadog, Gainsight, Looker, Active Directory, Bash, OAuth2, OpenID Connect, "
+    "SAML, LDAP, SCIM, SSO, SOAP, JSON, XML, Salesforce, Snowflake"
+).split(", ")
+
+
+@pytest.mark.parametrize("name", ADDED_PRODUCTS)
+def test_the_added_products_are_kept_case_insensitively(name: str) -> None:
+    policy = load_policy(DEFAULT_POLICY_PATH)
+
+    assert is_known(name, policy)
+    for spelling in (name, name.upper(), name.lower()):
+        assert decide(spelling, policy).keep is True, spelling
+
+
+def test_the_shipped_allow_list_holds_only_the_agreed_names() -> None:
+    policy = load_policy(DEFAULT_POLICY_PATH)
+    earlier = {
+        "decagon", "ada", "kore.ai", "coreml", "litert", "tflite", "milvus", "faiss", "karpenter",
+        "cluster autoscaler", "pulumi", "confluent platform", "kafka streams", "google ccai",
+        "amazon lex", "sagemaker", "eks", "ec2", "git", "gitlab", "node.js", "nestjs", "express",
+    }  # fmt: skip
+
+    later = {"avro", "sierra agent studio", "microsoft office", "framer", "heroku"}
+    assert policy.allow == earlier | later | {normal(name) for name in ADDED_PRODUCTS}
+
+
+def test_kafka_and_parquet_aliases_and_the_new_names_decide_as_agreed() -> None:
+    policy = load_policy(DEFAULT_POLICY_PATH)
+
+    for name, final in (("Apache Kafka & Kafka Ecosystem", "Kafka"), ("apache parquet", "Parquet")):
+        decision = decide(name, policy)
+        assert (decision.keep, decision.name) == (True, final)
+    for name in ("Avro", "Sierra Agent Studio", "microsoft office"):
+        assert decide(name, policy).reason == "allow-list"
+    assert decide("Distributed Query Engines", policy) == Decision(
+        False, "deny-list", "Distributed Query Engines"
+    )
+    assert kept_after(["Apache Kafka & Kafka Ecosystem", "Kafka"], policy) == ["Kafka"]
+
+
+def kept_after(stack: list[str], policy: Policy) -> list[str]:
+    proposals = build_proposals(make_file(stack))
+    apply_policy(proposals, policy)
+    return [i.name for p in proposals for i in p.items if i.keep]
+
+
+def test_react_vite_is_split_and_aws_slash_is_handled_by_the_shipped_lists() -> None:
+    policy = load_policy(DEFAULT_POLICY_PATH)
+    proposals = build_proposals(
+        make_file(["React Vite", "AWS/Cloud Infrastructure", "AWS or GCP", "OAuth2/SAML"])
+    )
+    apply_policy(proposals, policy)
+
+    verdict = [(i.name, i.keep) for p in proposals for i in p.items]
+    assert verdict == [
+        ("React", True),
+        ("Vite", True),
+        ("AWS", True),
+        ("Cloud Infrastructure", False),
+        ("AWS", False),  # a duplicate of the AWS above
+        ("GCP", True),
+        ("OAuth2", True),
+        ("SAML", True),
+    ]
+
+
+# --- scan for more real products ------------------------------------------------------------------
+
+
+def test_the_summary_lists_capitalised_words_in_dropped_entries_that_no_list_covers() -> None:
+    proposals = proposals_after_policy(
+        ["Quuxdb", "Quuxdb Cloud", "Frobnicate Engine", "Zorbo", "Docker", "Connect", "RAG"]
+    )
+
+    summary = clean.uncovered_words_summary(proposals, POLICY)
+
+    assert summary[0].startswith("Dropped as 'not a known product'")
+    assert summary[1:] == [
+        "  Quuxdb (2): Quuxdb, Quuxdb Cloud",
+        "  Engine (1): Frobnicate Engine",
+        "  Frobnicate (1): Frobnicate Engine",
+    ]
+
+
+def test_the_summary_skips_covered_and_lowercase_words_and_other_drop_reasons() -> None:
+    proposals = proposals_after_policy(
+        ["Vector Databases (Zorbo, Docker)", "SOC 2", "Connect", "RAG", "and the thing", "of Vite"]
+    )
+
+    # Category name, standard, fragment, deny-list: not "not a known product".
+    assert clean.uncovered_words_summary(proposals, POLICY) == []
+
+
+def test_the_summary_is_short_and_says_how_many_more() -> None:
+    names = [f"Word{chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(clean.SUMMARY_LIMIT + 5)]
+    proposals = proposals_after_policy(names)
+
+    summary = clean.uncovered_words_summary(proposals, POLICY)
+
+    assert len(summary) == clean.SUMMARY_LIMIT + 2
+    assert summary[-1] == "  ... and 5 more words"
+
+
+def test_plain_english_words_are_left_out_of_the_scan() -> None:
+    words = (
+        "Cloud Data Model Systems Tools Analysis Production Security Standards Evaluation "
+        "Learning Machine Platforms Processing Stores Web Infrastructure"
+    ).split()
+    proposals = proposals_after_policy([f"Quuxdb {word}" for word in words] + ["Salesforce Tools"])
+
+    summary = clean.uncovered_words_summary(proposals, POLICY)
+
+    examples = ", ".join(f"Quuxdb {w}" for w in words[:3])
+    assert summary[1:] == [f"  Quuxdb ({len(words)}): {examples}"]
+    assert not any("Tools (" in line for line in summary)
+
+
+def test_the_full_scan_goes_to_a_file_next_to_the_labels_and_the_screen_is_capped(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "labels.json"
+    names = [f"Word{chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(clean.SUMMARY_LIMIT + 7)]
+    save_label_file(path, make_file(names))
+    session, _, output = scripted(["n"])
+
+    clean.run(path, session, POLICY)
+
+    scan = (tmp_path / "policy_scan.txt").read_text(encoding="utf-8").splitlines()
+    assert len(scan) == len(names) + 1  # a header and every word
+    assert not any("more words" in line for line in scan)
+    assert "  ... and 7 more words" in output
+    assert f"Every such word is in {tmp_path / 'policy_scan.txt'}" in output
+    assert len([line for line in output if line.startswith("  Word")]) == clean.SUMMARY_LIMIT
+
+
+def test_an_old_scan_file_is_removed_when_this_run_has_no_words(tmp_path: Path) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, make_file(["Docker", "Cloud architecture"]))
+    (tmp_path / "policy_scan.txt").write_text("old scan", encoding="utf-8")
+
+    clean.run(path, scripted(["n"])[0], POLICY)
+
+    assert not (tmp_path / "policy_scan.txt").exists()
+
+
+def test_without_policy_no_scan_file_is_written(tmp_path: Path) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, make_file(["Quuxdb Cloud", "Cloud architecture"]))
+
+    clean.run(path, scripted(["d", "n"])[0])
+
+    assert not (tmp_path / "policy_scan.txt").exists()
+
+
+def test_the_summary_is_printed_after_the_table_in_policy_mode_only(tmp_path: Path) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, make_file(["Docker", "Quuxdb Cloud"]))
+    session, _, output = scripted(["n"])
+
+    clean.run(path, session, POLICY)
+
+    table_at = next(i for i, line in enumerate(output) if line.startswith("post "))
+    summary_at = next(i for i, line in enumerate(output) if line.startswith("Dropped as"))
+    assert summary_at > table_at
+    session, _, output = scripted(["d", "n"])
+    clean.run(path, session)
+    assert not any(line.startswith("Dropped as") for line in output)
 
 
 # --- the command ----------------------------------------------------------------------------------

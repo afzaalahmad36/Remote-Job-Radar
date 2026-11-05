@@ -10,6 +10,12 @@ hands-on, expert, proficient) are stripped, so "and AWS" is "AWS" and "strong SQ
 lists are checked first on the entry as written, so "Deep Learning" is caught before "deep" could be
 stripped from it.
 
+An entry that glues several products together is split first (`expand`), and each part is decided
+on its own: an alias that names two products ("React Vite"), a slash without spaces when at least
+one side is a known product ("AWS/Cloud Infrastructure" is "AWS" plus a dropped "Cloud
+Infrastructure"), and " or " between two known products ("AWS or GCP"). A "known" product is on
+the allow-list, an alias, or in the stack dictionary.
+
 The signals, in order (the first that applies decides, and its name is shown as the reason):
 
 1. fragment     on the `fragments` list, or nothing is left after stripping
@@ -37,6 +43,7 @@ DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "eval_clean_policy.toml"
 _LISTS = ("allow", "deny", "fragments")
 _KEYS = frozenset({*_LISTS, "aliases"})
 _STANDARD = re.compile(r"\b(soc\s*\d|iso\s*\d+|pci|gdpr|hipaa|nist)\b", re.IGNORECASE)
+_OR = re.compile(r"\s+or\s+", re.IGNORECASE)
 _CONNECTORS = frozenset({"and", "or"})
 SKILL_ADJECTIVES = frozenset({"strong", "solid", "deep", "hands-on", "expert", "proficient"})
 
@@ -51,7 +58,8 @@ class Policy:
     allow: frozenset[str]
     deny: frozenset[str]
     fragments: frozenset[str]
-    aliases: dict[str, str] = field(default_factory=dict)  # normal(alias) -> canonical name
+    # normal(alias) -> the product(s) it stands for; more than one means "split into these"
+    aliases: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -82,17 +90,29 @@ def load_policy(path: Path) -> Policy:
         key: frozenset(normal(v) for v in _string_list(path, key, data.get(key, [])))
         for key in _LISTS
     }
-    raw_aliases = data.get("aliases", {})
-    if not isinstance(raw_aliases, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in raw_aliases.items()
-    ):
-        raise ScriptError(f"{path}: 'aliases' must map names to names")
-    aliases = {normal(alias): canonical for alias, canonical in raw_aliases.items()}
+    aliases = _load_aliases(path, data.get("aliases", {}))
     clash = (lists["allow"] | set(aliases)) & (lists["deny"] | lists["fragments"])
     if clash:
         names = ", ".join(sorted(clash))
         raise ScriptError(f"{path}: on both a keep list and a drop list: {names}")
     return Policy(lists["allow"], lists["deny"], lists["fragments"], aliases)
+
+
+def _load_aliases(path: Path, raw: object) -> dict[str, tuple[str, ...]]:
+    message = f"{path}: 'aliases' must map names to a name or a non-empty list of names"
+    if not isinstance(raw, dict):
+        raise ScriptError(message)
+    aliases = {}
+    for alias, target in raw.items():
+        targets = [target] if isinstance(target, str) else target
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or not all(isinstance(t, str) for t in targets)
+        ):
+            raise ScriptError(message)
+        aliases[normal(alias)] = tuple(targets)
+    return aliases
 
 
 def strip_leading(name: str) -> tuple[str, tuple[str, ...]]:
@@ -112,8 +132,8 @@ def _by_lists(name: str, policy: Policy) -> Decision | None:
         return Decision(False, "deny-list", name)
     if key in policy.allow:
         return Decision(True, "allow-list", name)
-    if key in policy.aliases:
-        canonical = policy.aliases[key]
+    if len(policy.aliases.get(key, ())) == 1:  # an alias for several products is split first
+        canonical = policy.aliases[key][0]
         return Decision(True, f"alias of {canonical}", canonical)
     return None
 
@@ -136,3 +156,44 @@ def decide(name: str, policy: Policy) -> Decision:
         return Decision(False, "fragment", name, rules)
     decision = _by_lists(stripped, policy) or _by_knowledge(stripped)
     return replace(decision, rules=rules)
+
+
+def is_known(name: str, policy: Policy) -> bool:
+    """On the allow-list, an alias, or in the stack dictionary."""
+    key = normal(name)
+    return key in policy.allow or key in policy.aliases or canonical_name(name) is not None
+
+
+def _split_on_slash(name: str, policy: Policy) -> list[str]:
+    parts = [part.strip() for part in name.split("/")]
+    if len(parts) > 1 and all(parts) and any(is_known(part, policy) for part in parts):
+        return parts
+    return []
+
+
+def _split_on_or(name: str, policy: Policy) -> list[str]:
+    parts = [part.strip() for part in _OR.split(name)]
+    if len(parts) > 1 and all(parts) and all(is_known(part, policy) for part in parts):
+        return parts
+    return []
+
+
+def expand(name: str, policy: Policy) -> list[tuple[str, tuple[str, ...]]]:
+    """Split an entry that glues several products together; each part is decided on its own.
+
+    Returns (part, rules) pairs; an entry that is not split comes back as itself, untouched, with no
+    rules. An entry the lists or the dictionary already know as a whole is never split ("CI/CD").
+    """
+    if _by_lists(name, policy) is not None or canonical_name(name) is not None:
+        return [(name, ())]
+    rest, stripped = strip_leading(name)
+    key = normal(rest)
+    if len(policy.aliases.get(key, ())) > 1:
+        return [(part, (*stripped, "split alias")) for part in policy.aliases[key]]
+    for rule, parts in (
+        ("split '/'", _split_on_slash(rest, policy)),
+        ("split 'or'", _split_on_or(rest, policy)),
+    ):
+        if parts:
+            return [(part, (*stripped, rule)) for part in parts]
+    return [(name, ())]
