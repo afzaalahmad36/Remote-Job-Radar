@@ -1,7 +1,8 @@
 """One-off helper: tidy the stack labels in `.local/eval/labels.json` before scoring.
 
 Run by hand, never by CI or app code. It reads and writes only the labels file; it does not touch
-the database, any stored extraction or any provider.
+the database, any stored extraction or any provider. The one exception is `--check-labels`, which
+only reads post text from the database (read-only) and writes nothing; see `eval_check_labels.py`.
 Cleaning changes the `stack` list of each labelled post and nothing else (ids, hashes, titles,
 companies, salary, remote policy and seniority stay byte-for-byte as they were).
 
@@ -27,8 +28,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.core.config import get_settings
 from app.extraction.stack import canonical_name
 from scripts.db_guard import ScriptError
+from scripts.eval_check_labels import run_check
 from scripts.eval_clean_policy import (
     DEFAULT_POLICY_PATH,
     Policy,
@@ -539,6 +542,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"allow, deny and fragment lists for --policy (default: {DEFAULT_POLICY_PATH.name})",
     )
+    parser.add_argument(
+        "--check-labels",
+        action="store_true",
+        help="read-only: report label problems against the post text from the database; "
+        "prints post numbers and rule codes only and writes nothing",
+    )
     return parser
 
 
@@ -604,9 +613,13 @@ def run(labels_path: Path, session: Session, policy: Policy | None = None) -> in
 def main(argv: Sequence[str] | None = None, session: Session | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.check_labels and (args.policy or args.policy_file is not None):
+        parser.error("--check-labels cannot be combined with --policy or --policy-file")
     if args.policy_file is not None and not args.policy:
         parser.error("--policy-file only makes sense together with --policy")
     try:
+        if args.check_labels:
+            return run_check(args.labels, get_settings())
         policy = load_policy(args.policy_file or DEFAULT_POLICY_PATH) if args.policy else None
         return run(args.labels, session or Session(), policy)
     except ScriptError as error:
