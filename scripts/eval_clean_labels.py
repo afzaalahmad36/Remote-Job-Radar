@@ -11,9 +11,10 @@ product, then ask for a final yes before writing anything.
 
     uv run python -m scripts.eval_clean_labels
 
-With `--policy` nothing is asked per entry: every entry that would be asked about gets a proposed
-keep or drop from the rule in `eval_clean_policy.py` (lists in `eval_clean_policy.toml`), the reason
-is shown in the table, and the one final "Write these changes?" question remains.
+With `--policy` nothing is asked per entry: every entry gets a proposed keep or drop from the rule
+in `eval_clean_policy.py` (lists in `eval_clean_policy.toml`; an entry is kept only if it is a known
+product), the reason is shown in the table, and the one final "Write these changes?" question
+remains.
 
     uv run python -m scripts.eval_clean_labels --policy
 """
@@ -386,21 +387,30 @@ def format_table(proposals: Sequence[Proposal]) -> str:
 
 
 def apply_policy(proposals: Sequence[Proposal], policy: Policy) -> tuple[int, int]:
-    """Propose keep or drop for entries the policy decides; none of them is asked about after.
+    """Propose keep or drop for every remaining entry; nothing is asked about afterwards.
 
     Returns (kept, dropped) counts of the entries it decided. Entries already dropped by a rule
-    (category name, annotation, duplicate) are left as they are.
+    (category name, annotation, duplicate) are left as they are. A name the policy rewrote ("and
+    AWS" is "AWS", an alias becomes its canonical name) is checked against the other kept entries
+    of the same post, so it cannot appear twice.
     """
     kept = dropped = 0
+    seen: dict[int, set[str]] = {}
     for proposal in proposals:
+        post_seen = seen.setdefault(proposal.post, set())
         for item in proposal.items:
             if not item.keep:
                 continue
-            decision = decide(item.name, item.flag, policy)
-            if decision is None:
-                continue
+            decision = decide(item.name, policy)
             item.flag = None
-            if decision.keep:
+            if decision.keep:  # a dropped entry keeps its original text, so the table shows it
+                item.name = decision.name
+                item.rules.extend(decision.rules)
+            if decision.keep and _key(item.name) in post_seen:
+                item.keep, item.drop_reason = False, "duplicate"
+                dropped += 1
+            elif decision.keep:
+                post_seen.add(_key(item.name))
                 item.note = decision.reason
                 kept += 1
             else:
@@ -449,7 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--policy",
         action="store_true",
-        help="propose keep or drop for every entry that would be asked about, and ask nothing",
+        help="propose keep or drop for every entry from the policy lists, and ask nothing",
     )
     parser.add_argument(
         "--policy-file",
@@ -476,7 +486,7 @@ def run(labels_path: Path, session: Session, policy: Policy | None = None) -> in
     proposals = build_proposals(label_file)
     if policy is not None:
         kept, dropped_by_policy = apply_policy(proposals, policy)
-        session.out(f"Policy: {kept} entries kept and {dropped_by_policy} dropped by the lists.")
+        session.out(f"Policy: {kept} entries kept and {dropped_by_policy} dropped.")
     issues_before = lint_file(label_file)
     if not any(p.changed or p.flagged for p in proposals):
         session.out(f"Nothing to clean ({len(issues_before)} lint problems).")

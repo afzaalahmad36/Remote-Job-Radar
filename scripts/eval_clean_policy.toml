@@ -1,7 +1,9 @@
 # Lists for `eval_clean_labels.py --policy`. Names are compared case-insensitively.
-# A name may not be on `allow` and on a drop list at the same time.
+# In --policy mode an entry is KEPT only if it is on `allow`, is an alias below, or the stack
+# dictionary (app/extraction/stack.py) knows it. Everything else is dropped as "not a known
+# product". A name may not be on a keep list and on a drop list at the same time.
 
-# Known products the stack dictionary (app/extraction/stack.py) lacks: kept.
+# Known products the stack dictionary lacks: kept.
 allow = [
     "Decagon",
     "Ada",
@@ -12,6 +14,7 @@ allow = [
     "Milvus",
     "Faiss",
     "Karpenter",
+    "Cluster Autoscaler",
     "Pulumi",
     "Confluent Platform",
     "Kafka Streams",
@@ -20,9 +23,14 @@ allow = [
     "SageMaker",
     "EKS",
     "EC2",
+    "Git",
+    "GitLab",
+    "Node.js",
+    "NestJS",
+    "Express",
 ]
 
-# Techniques, practices and fields, not products: dropped.
+# Techniques, practices, methods and non-engineering tools, not stack products: dropped.
 deny = [
     "LLMs",
     "LLM",
@@ -32,6 +40,12 @@ deny = [
     "OSINT",
     "IaC",
     "CI/CD",
+    "Infrastructure as Code",
+    "Retrieval-Augmented Generation",
+    "Wrike",
+    "Product",
+    "Marketing",
+    "CRM",
     # Process frameworks and sales methods: a method, not a technology.
     "Agile",
     "Scrum",
@@ -41,8 +55,8 @@ deny = [
     "Command of the Message",
 ]
 
-# Pieces of a sentence that are not an entry: dropped. (Anything starting with "and " or "or "
-# is dropped without being listed here.)
+# Pieces of a sentence that are not an entry: dropped. (A leading "and " / "or " is stripped
+# first and the rest is judged on its own, so those are not listed here.)
 fragments = [
     "Connect",
     "Retrieval",
@@ -53,3 +67,8 @@ fragments = [
     "batch models",
     "abuse",
 ]
+
+# Another spelling of a known product. It is kept under the name on the right, so it is a
+# duplicate of that name when the post lists both.
+[aliases]
+"Google Cloud Platform" = "GCP"
