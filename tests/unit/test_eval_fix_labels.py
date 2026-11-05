@@ -19,12 +19,14 @@ from scripts.db_guard import ScriptError
 from scripts.eval_fix_labels import (
     Change,
     PostFix,
+    Review,
     Session,
     entry_names,
     fix_post,
     format_changes,
     format_counts,
     format_lists,
+    format_reviews,
     periods_near,
     plan_fixes,
     run_fix,
@@ -76,18 +78,43 @@ def test_the_headline_is_the_first_non_empty_line() -> None:
     )
 
 
-def test_the_split_is_at_the_first_colon_and_space_and_keeps_the_spelling() -> None:
-    assert split_headline("A·Team: Staff Engineer: Platform") == (
-        "A·Team",
-        "Staff Engineer: Platform",
-    )
+@pytest.mark.parametrize(
+    "company", ["A·Team", "Abnormal AI", "ZoomInfo", "Acme Corp", "O'Neil & Co"]
+)
+def test_the_companys_own_spelling_is_kept_character_for_character(company: str) -> None:
+    assert split_headline(f"{company}: Staff Engineer") == (company, "Staff Engineer")
 
 
 @pytest.mark.parametrize(
-    "text", ["", "   \n ", "Backend Engineer at Acme", "Acme:Engineer", ": Engineer", "Acme: "]
+    ("headline", "problem"),
+    [
+        ("Backend Engineer at Acme", "exactly one"),
+        ("Acme:Engineer", "exactly one"),
+        ("Acme: Staff Engineer: Platform", "exactly one"),
+        ("One Two Three Four Five: Engineer", "1 to 4 words"),
+        ("Acme 2: Engineer", "digit"),
+        ("Acme: Engineer ($90k)", "'$' or a '('"),
+        ("Acme: Engineer (Remote)", "'$' or a '('"),
+        ("Acme: Engineer FULL TIME", "full time"),
+        ("Acme: Engineer, part-time", "full time"),
+        ("Acme: Hiring Engineer", "hiring"),
+        ("Acme: " + "x" * 70, "70 characters"),
+        (": Engineer", "1 to 4 words"),
+    ],
 )
-def test_a_headline_without_company_colon_role_cannot_be_split(text: str) -> None:
+def test_a_headline_that_fails_a_check_is_not_split(headline: str, problem: str) -> None:
+    assert split_headline(headline) is None
+    assert problem in (fix.headline_problem(headline) or "")
+
+
+def test_the_limits_are_inclusive_of_four_words_and_69_characters() -> None:
+    assert split_headline("A B C D: " + "x" * 69) == ("A B C D", "x" * 69)
+
+
+@pytest.mark.parametrize("text", ["", "   \n ", "Acme: "])
+def test_a_post_without_a_usable_headline_cannot_be_split(text: str) -> None:
     assert split_headline(text) is None
+    assert fix.headline_problem(text.strip() or None) is not None
 
 
 def test_title_and_company_come_from_the_headline() -> None:
@@ -110,10 +137,32 @@ def test_an_unsplittable_headline_changes_neither_field_and_needs_a_human() -> N
     result = fixed(messy(title="Backend Dev", company="Acme"), "Backend Engineer at Acme\n\nbody")
 
     assert (result.labels.title, result.labels.company) == ("Backend Dev", "Acme")
-    assert (fix.NEEDS_HUMAN, "headline is not 'Company: Role'; title and company unchanged") in (
-        result.flags
-    )
     assert not [c for c in result.changes if c.rule == fix.RULE_HEADLINE]
+    [review] = [r for r in result.reviews if r.field == "title, company"]
+    assert review.current == "title: Backend Dev; company: Acme"
+    assert "exactly one" in review.shows
+    assert "headline: Backend Engineer at Acme" in review.shows  # the text is in the table
+
+
+def test_a_company_the_label_and_the_post_spell_longer_is_not_shortened() -> None:
+    text = "Abnormal: Engineer\n\nAbnormal AI builds email security."
+
+    result = fixed(messy(company="Abnormal AI"), text)
+
+    assert result.labels.company == "Abnormal AI"
+    assert result.labels.title == "Engineer"
+
+
+def test_a_longer_company_label_the_post_never_spells_is_replaced() -> None:
+    result = fixed(messy(company="Abnormal AI"), "Abnormal: Engineer\n\nAbnormal builds things.")
+
+    assert result.labels.company == "Abnormal"
+
+
+def test_a_longer_label_that_is_a_different_word_is_replaced() -> None:
+    result = fixed(messy(company="Acmeville"), "Acme: Engineer\n\nAcmeville is a town.")
+
+    assert result.labels.company == "Acme"
 
 
 def test_rules_after_the_headline_use_the_current_title_when_it_was_not_split() -> None:
@@ -152,13 +201,54 @@ def test_seniority_is_the_one_enum_word_in_the_title(
     assert seniority_from_title(title) == expected
 
 
-def test_a_wrong_seniority_is_replaced_and_a_missing_word_clears_it() -> None:
-    assert fixed(messy()).labels.seniority == Seniority.SENIOR
-    cleared = fixed(messy(), "Acme Corp: Staff Engineer\n\nbody")
-    assert cleared.labels.seniority is None
-    assert ("seniority", "lead", "(none)", fix.RULE_SENIORITY) in [
-        (c.field, c.before, c.after, c.rule) for c in cleared.changes
+def test_seniority_is_computed_from_the_final_title() -> None:
+    result = fixed(messy(title="Senior Backend Engineer", seniority=Seniority.LEAD))
+
+    assert result.labels.seniority == Seniority.SENIOR
+    assert ("seniority", "lead", "senior", fix.RULE_SENIORITY) in [
+        (c.field, c.before, c.after, c.rule) for c in result.changes
     ]
+    assert result.reviews == []
+
+
+def test_a_title_edit_that_drops_a_level_word_keeps_the_label_and_needs_a_human() -> None:
+    # The label title says "Senior ..."; the headline gives a title without it.
+    result = fixed(
+        messy(title="Senior Engineer", seniority=Seniority.SENIOR),
+        "Acme: Platform Engineer\n\nbody",
+    )
+
+    assert result.labels.seniority == Seniority.SENIOR  # not blanked
+    [review] = [r for r in result.reviews if r.field == "seniority"]
+    assert review.current == "senior"
+    assert "senior" in review.shows and "Platform Engineer" in review.shows
+    assert not [c for c in result.changes if c.field == "seniority"]
+
+
+@pytest.mark.parametrize("word", ["Senior", "Staff", "Principal", "Lead", "Junior"])
+def test_every_guarded_level_word_is_kept_when_the_edit_drops_it(word: str) -> None:
+    result = fixed(
+        messy(title=f"{word} Engineer", seniority=Seniority.MID), "Acme: Platform Engineer\n\nb"
+    )
+
+    assert result.labels.seniority == Seniority.MID
+    assert [r.field for r in result.reviews] == ["seniority"]
+
+
+def test_a_title_without_a_level_word_still_clears_a_stale_seniority() -> None:
+    result = fixed(
+        messy(title="Platform Engineer", seniority=Seniority.LEAD), "Acme: Platform Engineer\n\nb"
+    )
+
+    assert result.labels.seniority is None  # the original title had no level word either
+    assert result.reviews == []
+
+
+def test_a_level_word_that_survives_the_edit_is_not_a_review() -> None:
+    result = fixed(messy(title="Acme: Senior Platform Engineer"), "Acme: Senior Platform Engineer")
+
+    assert result.labels.seniority == Seniority.SENIOR
+    assert result.reviews == []
 
 
 # --- rule 3: salary ------------------------------------------------------------------------------
@@ -215,12 +305,40 @@ def test_the_period_comes_from_the_word_next_to_the_amount(phrase: str, period: 
     assert result.labels.salary_period.value == period
 
 
-def test_a_period_word_must_be_within_sixty_characters_of_an_amount() -> None:
-    near = "Acme: Engineer\n\n90000 " + "x" * 10 + " per year"
-    far = "Acme: Engineer\n\n90000 " + "x" * 80 + " per year"
+def period_of(text: str) -> str | None:
+    result = fixed(messy(salary_min=90000, salary_max=None, salary_period=None), text)
+    return result.labels.salary_period.value if result.labels.salary_period else None
 
-    assert fixed(messy(salary_min=90000, salary_max=None), near).labels.salary_period is not None
-    assert fixed(messy(salary_min=90000, salary_max=None), far).labels.salary_period is None
+
+def test_a_period_word_is_found_within_sixty_characters_first() -> None:
+    assert period_of("Acme: Engineer\n\n90000 " + "x" * 10 + " per year") == "year"
+
+
+def test_a_period_word_up_to_two_hundred_characters_away_is_found_too() -> None:
+    assert period_of("Acme: Engineer\n\n90000 " + "x" * 150 + " per year") == "year"
+    assert period_of("Acme: Engineer\n\nper month " + "x" * 150 + " 90000") == "month"
+
+
+def test_a_period_word_beyond_two_hundred_characters_is_not_used() -> None:
+    assert period_of("Acme: Engineer\n\n90000. " + "x" * 300 + " per year") is None
+
+
+def test_a_period_word_in_the_same_sentence_is_found_beyond_two_hundred_characters() -> None:
+    sentence = "Pay is 90000 " + "and so on " * 30 + "paid yearly."
+
+    assert period_of("Acme: Engineer\n\n" + sentence) == "year"
+
+
+def test_a_period_word_in_another_sentence_or_line_is_not_the_amounts() -> None:
+    far = "x" * 300
+    assert period_of("Acme: Engineer\n\nPay 90000. " + far + " Paid yearly.") is None
+    assert period_of("Acme: Engineer\n\nPay 90000\n" + far + " paid yearly") is None
+
+
+def test_the_near_period_wins_over_a_farther_different_one() -> None:
+    text = "Acme: Engineer\n\nPay 90000 per year. " + "x" * 100 + " Contractors: 50 per hour."
+
+    assert period_of(text) == "year"
 
 
 @pytest.mark.parametrize("text", ["HR Manager 90000", "90000 for 5 years", "90000 in 4 weeks"])
@@ -242,9 +360,10 @@ def test_two_different_periods_near_the_amounts_leave_the_period_and_need_a_huma
     result = fixed(messy(salary_min=90000, salary_max=None, salary_period=SalaryPeriod.YEAR), text)
 
     assert result.labels.salary_period == SalaryPeriod.YEAR
-    assert (fix.NEEDS_HUMAN, "more than one salary period near the amounts; period unchanged") in (
-        result.flags
-    )
+    [review] = [r for r in result.reviews if r.field == "salary_period"]
+    assert review.current == "year"
+    assert "day, hour, year" in review.shows  # the periods that compete
+    assert "90000 per year, or 50 per hour. Overtime 90000 daily" in review.shows  # the line
 
 
 def test_with_no_amount_left_currency_and_period_go_too() -> None:
@@ -278,9 +397,76 @@ def test_an_entry_missing_from_the_text_is_removed_and_the_rest_keep_their_order
 
     assert result.labels.stack == ["Python", "Kubernetes"]
     assert [(c.before, c.after, c.rule) for c in result.changes if c.field == "stack"] == [
-        ("Rust", "(removed)", fix.RULE_STACK),
-        ("Go", "(removed)", fix.RULE_STACK),
+        ("Rust", "(removed; no partial match)", fix.RULE_STACK),
+        ("Go", "(removed; no partial match)", fix.RULE_STACK),
     ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "text"),
+    [
+        ("Next.js", "We build with NextJS."),
+        ("NextJS", "We build with Next.js."),
+        ("Next.js", "We build with next js."),
+        ("Node.js", "We run Node on servers."),
+        ("Node", "We run node.js on servers."),
+        ("PostgreSQL", "We store data in Postgres."),
+        ("Vue.js", "A Vue app."),
+        ("GitHub Actions", "We use github-actions."),
+        ("Tailwind CSS", "TailwindCSS styling."),
+        ("C++", "Experience with C++."),
+        ("Apache Kafka", "We run Kafka."),
+        ("Scikit-Learn", "We use scikit learn."),
+        ("Kubernetes", "We run on K8S."),
+    ],
+)
+def test_broader_matching_ignores_dots_hyphens_spaces_and_case(entry: str, text: str) -> None:
+    result = fixed(messy(stack=[entry]), "Acme: Engineer\n\n" + text)
+
+    assert result.labels.stack == [entry]
+    assert not [c for c in result.changes if c.field == "stack"]
+
+
+def test_the_broader_matching_is_still_whole_word() -> None:
+    result = fixed(
+        messy(stack=["Java", "Go", "Node"]), "Acme: Engineer\n\nJavaScript, good, nodes."
+    )
+
+    assert result.labels.stack == []
+
+
+def test_each_removed_entry_says_whether_a_partial_match_exists() -> None:
+    text = "Acme: Engineer\n\nWe use JavaScript and the Google ecosystem."
+    result = fixed(messy(stack=["Java", "Google Cloud Platform", "Rust"]), text)
+
+    notes = {c.before: c.after for c in result.changes if c.field == "stack"}
+    assert notes == {
+        "Java": "(removed; partial match: 'java' inside a longer word)",
+        "Google Cloud Platform": "(removed; partial match: word 'google')",
+        "Rust": "(removed; no partial match)",
+    }
+
+
+def test_up_to_three_removals_are_applied() -> None:
+    result = fixed(messy(stack=["Python", "Rust", "Zig", "Nim"]))
+
+    assert result.labels.stack == ["Python"]
+    assert [r for r in result.reviews if r.field == "stack"] == []
+
+
+def test_more_than_three_removals_remove_none_and_need_a_human() -> None:
+    entries = ["Python", "Rust", "Zig", "Nim", "Crystal"]
+    text = "Acme: Engineer\n\nWe use Python and Rustacean tools."
+
+    result = fixed(messy(stack=entries), text)
+
+    assert result.labels.stack == entries  # nothing removed
+    assert not [c for c in result.changes if c.field == "stack"]
+    [review] = [r for r in result.reviews if r.field == "stack"]
+    assert review.current == "Rust; Zig; Nim; Crystal"
+    assert "4 entries are not found; none removed" in review.shows
+    assert "Rust: partial match: 'rust' inside a longer word" in review.shows
+    assert "Zig: no partial match" in review.shows
 
 
 def test_a_dictionary_alias_keeps_the_entry() -> None:
@@ -411,9 +597,9 @@ def test_a_missing_or_stale_post_is_listed_and_not_touched() -> None:
 
     assert plan.changes == []
     assert plan.fixed.posts == original.posts
-    assert sorted(plan.lists[fix.NEEDS_HUMAN]) == [
-        (1, "post not found; not touched"),
-        (2, "post text changed since it was labelled; not touched"),
+    assert [(r.post, r.field, r.shows) for r in plan.reviews] == [
+        (1, "(whole post)", "post not found"),
+        (2, "(whole post)", "post text changed since it was labelled"),
     ]
 
 
@@ -516,7 +702,9 @@ def test_the_table_has_a_header_and_one_row_per_change() -> None:
 
 
 def test_counts_are_given_for_every_rule_even_when_zero() -> None:
-    lines = format_counts([Change(1, "stack", "Rust", "(removed)", fix.RULE_STACK)])
+    lines = format_counts(
+        [Change(1, "stack", "Rust", "(removed; no partial match)", fix.RULE_STACK)]
+    )
 
     assert len(lines) == len(fix.RULES)
     assert "  rule 4 not in text: 1 change(s) in 1 post(s)" in lines
@@ -524,9 +712,54 @@ def test_counts_are_given_for_every_rule_even_when_zero() -> None:
 
 
 def test_the_lists_are_printed_by_name_and_post() -> None:
-    lines = format_lists({fix.INFO: [(4, "stack is empty")], fix.NEEDS_HUMAN: [(2, "why")]})
+    lines = format_lists({fix.INFO: [(4, "stack is empty")], fix.SALARY_REMOVED: [(2, "why")]})
 
-    assert lines == ["  NEEDS_HUMAN: post 2: why", "  INFO: post 4: stack is empty"]
+    assert lines == ["  SALARY_AMOUNT_REMOVED: post 2: why", "  INFO: post 4: stack is empty"]
+
+
+def test_the_needs_human_table_has_the_four_columns_and_is_sorted_by_post() -> None:
+    lines = format_reviews(
+        [
+            Review(7, "stack", "A; B", "4 entries are not found"),
+            Review(2, "title, company", "title: T; company: C", "headline: X: Y: Z"),
+        ]
+    )
+
+    cells = [
+        [cell.strip() for cell in line.split(" | ")] for line in (lines[0], lines[2], lines[3])
+    ]
+    assert cells == [
+        ["post", "field", "current label", "what the post shows"],
+        ["2", "title, company", "title: T; company: C", "headline: X: Y: Z"],
+        ["7", "stack", "A; B", "4 entries are not found"],
+    ]
+
+
+def test_long_lines_shown_in_the_table_are_cut() -> None:
+    text = "Acme: Engineer\n\n" + "90000 per year " + "x" * 500
+    amounts = fix.lines_with_amounts(text, {90000})
+
+    assert len(amounts) == 1 and amounts[0].endswith("…") and len(amounts[0]) <= 301
+
+
+def test_the_command_prints_the_needs_human_table_and_writes_nothing_from_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = "Backend Engineer at Acme\n\nWe use Python. Pay $90,000 per year."
+    path = tmp_path / "labels.json"
+    labels = messy(title="Backend Dev", company="Acme", seniority=None, stack=["Python"])
+    save_label_file(path, label_file(entry(labels, text)))
+    fake_reader(monkeypatch, {1: text})
+    lines: list[str] = []
+
+    code = run_fix(path, SETTINGS, session("y", lines))
+
+    output = "\n".join(lines)
+    assert "NEEDS_HUMAN: 1 item(s); nothing in that table is written" in output
+    assert "current label" in output and "headline: Backend Engineer at Acme" in output
+    written = load_label_file(path).posts[0].labels
+    assert written is not None and (written.title, written.company) == ("Backend Dev", "Acme")
+    assert code in (0, 1)
 
 
 # --- the command ---------------------------------------------------------------------------------

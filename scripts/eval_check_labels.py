@@ -124,7 +124,7 @@ def amount_spans(folded: str) -> list[tuple[int, int, int]]:
 # --- the per-post checks ------------------------------------------------------------------------
 
 
-def _stack_variants(entry: str) -> set[str]:
+def stack_variants(entry: str) -> set[str]:
     key = fold(entry)
     variants = {key}
     canonical = canonical_name(entry)
@@ -178,7 +178,7 @@ def check_post(labels: Labels, text: str) -> list[Problem]:
         problems.append(Problem("title_not_in_text"))
     if labels.company:
         problems.extend(_company_problems(labels.company, folded))
-    missing = [e for e in labels.stack if not any(appears(v, folded) for v in _stack_variants(e))]
+    missing = [e for e in labels.stack if not any(appears(v, folded) for v in stack_variants(e))]
     if missing:
         problems.append(Problem("stack_not_in_text", len(missing)))
     problems.extend(_salary_problems(labels, folded))
