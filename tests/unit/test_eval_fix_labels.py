@@ -35,6 +35,7 @@ from scripts.eval_fix_labels import (
     periods_near,
     plan_fixes,
     run_fix,
+    seniority_evidence,
     seniority_from_title,
     split_headline,
     verify_only_allowed_changes,
@@ -1232,6 +1233,108 @@ def test_main_accepts_the_overrides_and_dry_run_options(
     )
 
     assert code == 0 and any("Chosen Co" in line for line in lines)
+
+
+# --- seniority evidence in the post body ---------------------------------------------------------
+
+FAR = "x" * 450 + ". "  # puts what follows beyond the first 400 characters, in its own sentence
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Acme: Engineer\n\nSenior role on our team. More.", "Senior role on our team"),
+        ("Acme: Engineer\n\nWe need a JUNIOR dev. Apply now.", "We need a JUNIOR dev"),
+        (
+            FAR + "We are looking for a Lead to guide us. Bye.",
+            "We are looking for a Lead to guide us",
+        ),
+        (FAR + "You will be a principal contributor.", "You will be a principal contributor."),
+        (
+            FAR + "Honestly, you are a mid engineer who ships. Bye",
+            "Honestly, you are a mid engineer who ships",
+        ),
+    ],
+)
+def test_seniority_evidence_is_the_sentence_with_the_level_word(text: str, expected: str) -> None:
+    assert seniority_evidence(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Acme: Engineer\n\nNo level is named here.",
+        "Internal tools and a seniority-free team.",  # not whole words
+        FAR + "The senior person on the team will guide you.",  # late, no phrase
+        FAR + "We hire a lead. We are looking for a builder.",  # phrase in another sentence
+        FAR + "Mid-sized company.\nYou are a builder.",  # phrase on another line
+    ],
+)
+def test_no_evidence_without_a_whole_level_word_early_or_in_a_phrase_sentence(text: str) -> None:
+    assert seniority_evidence(text) is None
+
+
+def test_a_level_word_must_start_inside_the_first_400_characters() -> None:
+    assert seniority_evidence("x" * 398 + " senior") is not None  # starts at index 399
+    assert seniority_evidence("x" * 399 + " senior") is None  # starts at index 400
+
+
+def test_long_evidence_sentences_are_cut() -> None:
+    sentence = seniority_evidence("Senior " + "word " * 200)
+
+    assert sentence is not None and sentence.endswith("…") and len(sentence) <= 301
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Acme needs someone to lead the design of our API.",
+        "You will lead a small team.",
+        "You can lead an effort.",
+        "Help lead our platform work.",
+        "Come lead your own squad.",
+        "Plan, lead and ship features.",
+        "We want to lead development of the app.",
+        "Please lead, then the team follows.",  # "the" is the second word after "lead"
+        "We hire to lead product design.",
+        "LEAD THE way.",  # case-insensitive
+    ],
+)
+def test_lead_followed_by_a_verb_use_word_within_two_words_is_not_evidence(text: str) -> None:
+    assert seniority_evidence(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Lead Engineer wanted.",
+        "We need a lead backend engineer today.",  # "backend engineer" is not in the list
+        "Lead: three years of Python.",  # "three years" is not in the list
+    ],
+)
+def test_lead_as_a_level_still_counts(text: str) -> None:
+    assert seniority_evidence(text) is not None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "You will work with senior engineers daily.",
+        "Report to our Senior Leaders.",
+        "Backed by senior leadership.",
+        "SENIOR ENGINEERS mentor you.",
+    ],
+)
+def test_senior_about_other_people_is_not_evidence(text: str) -> None:
+    assert seniority_evidence(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Senior engineer wanted.", "Senior Backend Engineers wanted.", "A senior role."],
+)
+def test_senior_not_followed_by_a_people_word_still_counts(text: str) -> None:
+    assert seniority_evidence(text) is not None
 
 
 # --- no provider, no extraction ------------------------------------------------------------------

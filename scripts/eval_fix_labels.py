@@ -321,6 +321,49 @@ def seniority_from_title(title: str | None) -> str | None:
     return found.pop() if len(found) == 1 else None
 
 
+EVIDENCE_CHARS = 400  # a level word this early in the post is taken as describing the role
+EVIDENCE_PHRASES = ("we are looking for", "you will be a", "you are a")
+
+
+LEAD_VERB_NEXT = frozenset({"the", "a", "an", "our", "your", "and", "design", "development"})
+SENIOR_PEOPLE_NEXT = frozenset({"engineers", "leaders", "leadership"})
+_NEXT_WORDS = re.compile(r"[A-Za-z']+")
+
+
+def _names_a_level(text: str, match: re.Match[str]) -> bool:
+    """False when the word is used as a verb ("lead the ...") or about others ("senior leaders").
+
+    "lead" is a verb use when one of the next two words is in LEAD_VERB_NEXT; "senior" refers to
+    other people when the next word is in SENIOR_PEOPLE_NEXT. Any other level word always counts.
+    """
+    word = match.group(1).lower()
+    following = [w.lower() for w in _NEXT_WORDS.findall(text[match.end() : match.end() + 80])]
+    if word == "lead":
+        return not LEAD_VERB_NEXT.intersection(following[:2])
+    if word == "senior":
+        return not (following and following[0] in SENIOR_PEOPLE_NEXT)
+    return True
+
+
+def seniority_evidence(text: str) -> str | None:
+    """The sentence that shows the post names a level for the role, or None.
+
+    One of intern / junior / mid / senior / lead / principal as a whole word, case-insensitive,
+    either within the first 400 characters of the post or in a sentence that also holds "we are
+    looking for", "you will be a" or "you are a". Mechanical on purpose: it does not read meaning,
+    so the printed sentence is there for a human to judge. Two word-level exceptions (see
+    `_names_a_level`) drop "lead" used as a verb and "senior" used about other people.
+    """
+    for match in _SENIORITY.finditer(text):
+        if not _names_a_level(text, match):
+            continue
+        sentence = _sentence(text, match.start(), match.end())
+        in_phrase = any(phrase in sentence.casefold() for phrase in EVIDENCE_PHRASES)
+        if match.start() < EVIDENCE_CHARS or in_phrase:
+            return _cut(" ".join(sentence.split()))
+    return None
+
+
 def level_words(title: str | None) -> set[str]:
     return {match.group(1).lower() for match in _GUARDED_LEVEL.finditer(title or "")}
 
