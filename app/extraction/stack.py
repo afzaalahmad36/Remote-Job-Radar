@@ -125,6 +125,12 @@ def canonical_name(name: str) -> str | None:
     return _ALIASES.get(folded) or _CANONICAL_BY_FOLDED.get(folded)
 
 
+def spellings(name: str) -> tuple[str, ...]:
+    """The canonical name and every spelling listed for it, or () for an unknown technology."""
+    canonical = canonical_name(name)
+    return (canonical, *_TECHNOLOGIES[canonical]) if canonical else ()
+
+
 def find_stack(text: str) -> list[str]:
     """Technologies named in the text, in order of first appearance, without duplicates."""
     tokens = [

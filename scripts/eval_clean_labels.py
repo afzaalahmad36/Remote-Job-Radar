@@ -1,15 +1,23 @@
 """One-off helper: tidy the stack labels in `.local/eval/labels.json` before scoring.
 
 Run by hand, never by CI or app code. It reads and writes only the labels file; it does not touch
-the database, any stored extraction or any provider. It changes the `stack` list of each labelled
-post and nothing else (ids, hashes, titles, companies, salary, remote policy and seniority stay
-byte-for-byte as they were).
+the database, any stored extraction or any provider. The one exception is `--check-labels`, which
+only reads post text from the database (read-only) and writes nothing; see `eval_check_labels.py`.
+Cleaning changes the `stack` list of each labelled post and nothing else (ids, hashes, titles,
+companies, salary, remote policy and seniority stay byte-for-byte as they were).
 
 Order of events: copy `labels.json` to `labels.raw.json` (never overwritten), show every proposed
 rewrite as a table (before, after, rule), ask keep/drop for each entry that is not clearly a named
 product, then ask for a final yes before writing anything.
 
     uv run python -m scripts.eval_clean_labels
+
+With `--policy` nothing is asked per entry: every entry gets a proposed keep or drop from the rule
+in `eval_clean_policy.py` (lists in `eval_clean_policy.toml`; an entry is kept only if it is a known
+product), the reason is shown in the table, and the one final "Write these changes?" question
+remains.
+
+    uv run python -m scripts.eval_clean_labels --policy
 """
 
 import argparse
@@ -20,8 +28,19 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.core.config import get_settings
 from app.extraction.stack import canonical_name
 from scripts.db_guard import ScriptError
+from scripts.eval_check_labels import run_check
+from scripts.eval_clean_policy import (
+    DEFAULT_POLICY_PATH,
+    Policy,
+    decide,
+    expand,
+    is_known,
+    load_policy,
+    normal,
+)
 from scripts.eval_labelfile import (
     DEFAULT_LABELS_PATH,
     LabelEntry,
@@ -88,7 +107,8 @@ class Item:
     """One candidate entry. `rules` say what happened to it.
 
     `drop_reason` is set when the script proposes dropping it (category name, annotation,
-    duplicate); `flag` is why the human is asked; `keep` is the human's answer.
+    duplicate, policy); `note` is why the policy keeps it; `flag` is why the human is asked;
+    `keep` is the proposal or the human's answer.
     """
 
     name: str
@@ -96,11 +116,14 @@ class Item:
     keep: bool = True
     rules: list[str] = field(default_factory=list)
     drop_reason: str | None = None
+    note: str | None = None
 
     def rule_text(self) -> str:
         parts = list(self.rules)
         if self.drop_reason:
             parts.append(f"DROP ({self.drop_reason})")
+        if self.note:
+            parts.append(f"KEEP ({self.note})")
         if self.flag:
             parts.append(f"ASK: {self.flag}")
         return ", ".join(parts) or "kept"
@@ -119,7 +142,12 @@ class Proposal:
         if len(self.items) != 1:
             return True
         item = self.items[0]
-        return item.name != self.before or bool(item.rules) or item.drop_reason is not None
+        return (
+            item.name != self.before
+            or bool(item.rules)
+            or item.drop_reason is not None
+            or item.note is not None
+        )
 
     @property
     def flagged(self) -> bool:
@@ -369,6 +397,103 @@ def format_table(proposals: Sequence[Proposal]) -> str:
     return "\n".join(line.rstrip() for line in lines)
 
 
+def _expanded(items: Sequence[Item], policy: Policy) -> list[Item]:
+    """Replace each entry that glues products together ("AWS or GCP", "React Vite") by its parts."""
+    result: list[Item] = []
+    for item in items:
+        parts = expand(item.name, policy) if item.keep else [(item.name, ())]
+        if len(parts) == 1 and not parts[0][1]:
+            result.append(item)
+        else:
+            result.extend(Item(name, rules=[*item.rules, *rules]) for name, rules in parts)
+    return result
+
+
+def apply_policy(proposals: Sequence[Proposal], policy: Policy) -> tuple[int, int]:
+    """Propose keep or drop for every remaining entry; nothing is asked about afterwards.
+
+    Returns (kept, dropped) counts of the entries it decided. Entries already dropped by a rule
+    (category name, annotation, duplicate) are left as they are. An entry that glues products
+    together is split first. A name the policy rewrote ("and AWS" is "AWS", an alias becomes its
+    canonical name) is checked against the other kept entries of the same post, so it cannot appear
+    twice.
+    """
+    kept = dropped = 0
+    seen: dict[int, set[str]] = {}
+    for proposal in proposals:
+        post_seen = seen.setdefault(proposal.post, set())
+        proposal.items = _expanded(proposal.items, policy)
+        for item in proposal.items:
+            if not item.keep:
+                continue
+            decision = decide(item.name, policy)
+            item.flag = None
+            if decision.keep:  # a dropped entry keeps its original text, so the table shows it
+                item.name = decision.name
+                item.rules.extend(decision.rules)
+            if decision.keep and _key(item.name) in post_seen:
+                item.keep, item.drop_reason = False, "duplicate"
+                dropped += 1
+            elif decision.keep:
+                post_seen.add(_key(item.name))
+                item.note = decision.reason
+                kept += 1
+            else:
+                item.keep, item.drop_reason = False, decision.reason
+                dropped += 1
+    return kept, dropped
+
+
+_CAPITALISED_WORD = re.compile(r"[A-Za-z][A-Za-z0-9.+#-]*")
+_SMALL_WORDS = frozenset(
+    {"and", "or", "the", "of", "for", "with", "in", "to", "a", "an", "on", "as"}
+)
+SUMMARY_LIMIT = 40
+# Ordinary words the scan skips so product names stand out (it does not affect any decision).
+ENGLISH_WORDS = frozenset(
+    """
+    cloud data model systems tools analysis production security standards evaluation learning
+    machine platforms processing stores web infrastructure
+    """.split()
+)
+SCAN_FILE_NAME = "policy_scan.txt"
+
+
+def uncovered_words_summary(
+    proposals: Sequence[Proposal], policy: Policy, limit: int | None = SUMMARY_LIMIT
+) -> list[str]:
+    """Lines listing capitalised words in dropped entries that no list or dictionary covers.
+
+    Only entries dropped as "not a known product" count, and plain English words (ENGLISH_WORDS)
+    are left out so real product names stand out. The point is a quick scan for real products the
+    lists lack: add a real one to `allow` and run again. `limit=None` lists every word.
+    """
+    entries: dict[str, list[str]] = {}
+    for proposal in proposals:
+        for item in proposal.items:
+            if item.drop_reason != "not a known product":
+                continue
+            for word in _CAPITALISED_WORD.findall(item.name):
+                key = normal(word)
+                covered = is_known(word, policy) or key in policy.deny or key in policy.fragments
+                plain = key in _SMALL_WORDS or key in ENGLISH_WORDS
+                if word[0].isupper() and not plain and not covered:
+                    if item.name not in entries.setdefault(word, []):
+                        entries[word].append(item.name)
+    if not entries:
+        return []
+    ranked = sorted(entries.items(), key=lambda pair: (-len(pair[1]), pair[0].casefold()))
+    lines = [
+        "Dropped as 'not a known product' with a capitalised word no list covers (scan these):"
+    ]
+    shown = ranked if limit is None else ranked[:limit]
+    for word, names in shown:
+        lines.append(f"  {word} ({len(names)}): {', '.join(names[:3])}")
+    if len(shown) < len(ranked):
+        lines.append(f"  ... and {len(ranked) - len(shown)} more words")
+    return lines
+
+
 def ask_keep_or_drop(proposals: Sequence[Proposal], ask: Callable[[str], str]) -> bool:
     """Ask about each flagged entry. False when the user quits (nothing is written then)."""
     flagged = [(p, i) for p in proposals for i in p.items if i.flag]
@@ -406,6 +531,23 @@ def build_parser() -> argparse.ArgumentParser:
         prog="eval_clean_labels", description="Tidy the stack labels before scoring."
     )
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS_PATH)
+    parser.add_argument(
+        "--policy",
+        action="store_true",
+        help="propose keep or drop for every entry from the policy lists, and ask nothing",
+    )
+    parser.add_argument(
+        "--policy-file",
+        type=Path,
+        default=None,
+        help=f"allow, deny and fragment lists for --policy (default: {DEFAULT_POLICY_PATH.name})",
+    )
+    parser.add_argument(
+        "--check-labels",
+        action="store_true",
+        help="read-only: report label problems against the post text from the database; "
+        "prints post numbers and rule codes only and writes nothing",
+    )
     return parser
 
 
@@ -415,7 +557,7 @@ class Session:
     out: Callable[[str], None] = field(default=print)
 
 
-def run(labels_path: Path, session: Session) -> int:
+def run(labels_path: Path, session: Session, policy: Policy | None = None) -> int:
     if not labels_path.is_file():
         raise ScriptError(f"{labels_path} does not exist")
     label_file = load_label_file(labels_path)
@@ -423,11 +565,26 @@ def run(labels_path: Path, session: Session) -> int:
     session.out(f"Backup: {backup} ({'written' if created else 'already there, kept as it is'})")
 
     proposals = build_proposals(label_file)
+    if policy is not None:
+        kept, dropped_by_policy = apply_policy(proposals, policy)
+        session.out(f"Policy: {kept} entries kept and {dropped_by_policy} dropped.")
     issues_before = lint_file(label_file)
     if not any(p.changed or p.flagged for p in proposals):
         session.out(f"Nothing to clean ({len(issues_before)} lint problems).")
         return 0 if not issues_before else 1
     session.out(format_table(proposals))
+    if policy is not None:
+        summary = uncovered_words_summary(proposals, policy)
+        if summary:
+            scan_path = labels_path.with_name(SCAN_FILE_NAME)
+            full = uncovered_words_summary(proposals, policy, limit=None)
+            scan_path.write_text("\n".join(full) + "\n", encoding="utf-8")
+            session.out("")
+            for line in summary:
+                session.out(line)
+            session.out(f"Every such word is in {scan_path}")
+        else:  # do not leave an older scan behind to be mistaken for this run's
+            labels_path.with_name(SCAN_FILE_NAME).unlink(missing_ok=True)
     unchanged = sum(not (p.changed or p.flagged) for p in proposals)
     session.out(f"\n{unchanged} entries already clean. Lint problems now: {len(issues_before)}.")
 
@@ -436,7 +593,7 @@ def run(labels_path: Path, session: Session) -> int:
             session.out("Stopped. Nothing was changed.")
             return 1
         dropped = sum(not i.keep for p in proposals for i in p.items)
-        answer = session.ask(f"Write these changes ({dropped} flagged entries dropped)? [y/N] ")
+        answer = session.ask(f"Write these changes ({dropped} entries dropped)? [y/N] ")
     except EOFError:
         session.out("\nInput ended. Nothing was changed.")
         return 1
@@ -454,9 +611,17 @@ def run(labels_path: Path, session: Session) -> int:
 
 
 def main(argv: Sequence[str] | None = None, session: Session | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.check_labels and (args.policy or args.policy_file is not None):
+        parser.error("--check-labels cannot be combined with --policy or --policy-file")
+    if args.policy_file is not None and not args.policy:
+        parser.error("--policy-file only makes sense together with --policy")
     try:
-        return run(args.labels, session or Session())
+        if args.check_labels:
+            return run_check(args.labels, get_settings())
+        policy = load_policy(args.policy_file or DEFAULT_POLICY_PATH) if args.policy else None
+        return run(args.labels, session or Session(), policy)
     except ScriptError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

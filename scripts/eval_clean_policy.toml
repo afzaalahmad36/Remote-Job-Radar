@@ -1,0 +1,121 @@
+# Lists for `eval_clean_labels.py --policy`. Names are compared case-insensitively.
+# In --policy mode an entry is KEPT only if it is on `allow`, is an alias below, or the stack
+# dictionary (app/extraction/stack.py) knows it. Everything else is dropped as "not a known
+# product". A name may not be on a keep list and on a drop list at the same time.
+
+# Known products the stack dictionary lacks: kept.
+allow = [
+    "Decagon",
+    "Ada",
+    "Kore.ai",
+    "CoreML",
+    "LiteRT",
+    "TFLite",
+    "Milvus",
+    "Faiss",
+    "Karpenter",
+    "Cluster Autoscaler",
+    "Pulumi",
+    "Confluent Platform",
+    "Kafka Streams",
+    "Google CCAI",
+    "Amazon Lex",
+    "SageMaker",
+    "EKS",
+    "EC2",
+    "Git",
+    "GitLab",
+    "Node.js",
+    "NestJS",
+    "Express",
+    "Expo",
+    "Prisma",
+    "Maven",
+    "JAX",
+    "OpenCV",
+    "Pillow",
+    "TensorRT",
+    "ONNX",
+    "Vite",
+    "Databricks",
+    "Trino",
+    "ClickHouse",
+    "Tinybird",
+    "Apache Arrow",
+    "Parquet",
+    "Apache Iceberg",
+    "Apache Airflow",
+    "Hadoop",
+    "AWS CloudFormation",
+    "OpenTelemetry",
+    "Datadog",
+    "Gainsight",
+    "Looker",
+    "Active Directory",
+    "Bash",
+    "OAuth2",
+    "OpenID Connect",
+    "SAML",
+    "LDAP",
+    "SCIM",
+    "SSO",
+    "SOAP",
+    "JSON",
+    "XML",
+    "Salesforce",
+    "Snowflake",
+    "Avro",
+    "Sierra Agent Studio",
+    "Microsoft Office",
+    "Framer",
+    "Heroku",
+]
+
+# Techniques, practices, methods and non-engineering tools, not stack products: dropped.
+deny = [
+    "LLMs",
+    "LLM",
+    "RAG",
+    "MLOps",
+    "Deep Learning",
+    "OSINT",
+    "IaC",
+    "CI/CD",
+    "Infrastructure as Code",
+    "Retrieval-Augmented Generation",
+    "Wrike",
+    "Product",
+    "Marketing",
+    "CRM",
+    "Distributed Query Engines",
+    # Process frameworks and sales methods: a method, not a technology.
+    "Agile",
+    "Scrum",
+    "Kanban",
+    "Challenger",
+    "MEDDPICC",
+    "Command of the Message",
+]
+
+# Pieces of a sentence that are not an entry: dropped. (A leading "and " / "or " is stripped
+# first and the rest is judged on its own, so those are not listed here.)
+fragments = [
+    "Connect",
+    "Retrieval",
+    "AWS-first",
+    "3DS",
+    "TIPs",
+    "real-time",
+    "batch models",
+    "abuse",
+]
+
+# Another spelling of a known product. It is kept under the name on the right, so it is a
+# duplicate of that name when the post lists both.
+[aliases]
+"Microsoft Office Suite" = "Microsoft Office"
+"Google Cloud Platform" = "GCP"
+# A name for several products is split into them, each decided on its own.
+"React Vite" = ["React", "Vite"]
+"Apache Kafka & Kafka Ecosystem" = "Kafka"
+"Apache Parquet" = "Parquet"

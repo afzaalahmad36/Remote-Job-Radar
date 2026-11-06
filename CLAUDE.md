@@ -190,6 +190,13 @@ CI never labels or scores real posts, and the scoring never makes a provider req
 Salary follows the rules' conventions: a single amount is min = max, "up to X" is max only, "from X"
 or "X+" is min only.
 
+**What counts as a stack label.** An entry counts only if it is the name of a product, language,
+framework, library, database, cloud service or protocol that someone would list on a CV. Practices,
+methods, domains, standards (SOC 2, ISO 27001) and abstract nouns are excluded, and the lists in
+`scripts/eval_clean_policy.toml` encode the borderline calls (`scripts/eval_clean_labels.py --policy`
+applies them). The lists were fixed before scoring and without looking at any extraction: the cleaner
+reads only the labels file.
+
 **Two outputs are scored the same way:** the stored extraction (the job's database columns) and the
 rules recomputed offline from `raw_text`.
 
@@ -204,6 +211,18 @@ suffixes at the end (inc, llc, ltd, gmbh, ag, bv, sa, plc, corp, co). Stack entr
 `canonical_name()` (`app/extraction/stack.py`); an entry the dictionary does not know is compared as
 its casefolded, whitespace-collapsed text. Enums compare as enum values (`on-site` is `onsite`);
 currency is an upper-case ISO code; amounts are exact integers.
+
+**Title convention.** The title label is the role title without the company prefix, and the company
+goes in the company label: a headline "Acme Corp: Senior Backend Engineer" is title `Senior Backend
+Engineer`, company `Acme Corp`. This is the scoring's normalisation applied as written, not a
+loosening of it: it removes gender markers and turns `- – — / | ,` into spaces, but it does not
+remove a company prefix and does not treat `:` as a separator, so a title that still carries
+"Acme Corp: " never matches a title without it. The rules split a "Company: Role" headline the same
+way. The labels were corrected from the post text alone, before any scoring, by
+`scripts/eval_fix_labels.py` (headline split, seniority word in the title, salary amounts and period
+words found in the text, stack entries not in the text removed and none added; `remote_policy` is
+left as labelled). It reads only each post's id and text, never an extraction. The earlier versions
+are kept as `labels.raw.json` (before the stack cleaner) and `labels.clean-v1.json` (before this fix).
 
 **A post parses correctly when all of these hold:**
 1. Title: the system has one and it matches the label.
@@ -328,6 +347,14 @@ uv run python -m scripts.try_extraction --allow-provider --max-requests 3
 # Conventions are printed in the script's header: blank = the post does not say; a single salary
 # amount is min = max; list every technology the post names.
 uv run python -m scripts.eval_label --source-name "My Feed" --n 30 --seed 1
+# Optional one-off fix of the labels from the post text alone (title/company from the headline,
+# seniority, salary, stack). Reads only each post's id and text (read-only, same guard), never an
+# extraction, no provider request. Copies the file to labels.clean-v1.json first (never overwritten),
+# prints every change and asks "Write these changes? [y/N]" before writing.
+# --dry-run prints the same table and writes nothing (no backup, no question). Optional per-post
+# overrides in .local/eval/label_overrides.json (git-ignored, keyed by the post's position: title,
+# company, stack, seniority, or "keep": [fields] to leave a field as labelled) win over the rules.
+uv run python -m scripts.eval_fix_labels
 # Then score: the stored extraction and the rules recomputed offline, against your labels. It reads
 # the database, makes ZERO provider requests (it refuses --allow-provider and builds no client) and
 # writes a run record without post text or labels under .local/eval/runs/.
