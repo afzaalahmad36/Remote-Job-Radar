@@ -106,3 +106,52 @@ def test_the_best_backed_candidate_wins_over_an_earlier_weak_one() -> None:
 def test_amounts_outside_the_plausible_range_for_their_period_are_dropped() -> None:
     assert find_salary("$900,000 per hour") is None
     assert find_salary("$3 per month") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A 401(k) with 100% employer match (up to $6,000/year) in the U.S.",
+        "$500 home office set-up stipend",
+        "Working from Home Allowance ($40 / Monthly)",
+        "Signing bonus of $10,000",
+        "Reimbursement up to $1,200 per year for courses",
+        "Annual bonus $5,000",
+    ],
+)
+def test_money_in_a_benefit_sentence_is_not_a_salary(text: str) -> None:
+    assert find_salary(text) is None
+
+
+def test_a_benefit_sentence_with_a_pay_word_is_still_a_salary() -> None:
+    found = find_salary("Base salary $120,000 per year plus a bonus.")
+
+    assert found is not None and found.value == Salary(120_000, 120_000, "USD", Y)
+
+
+def test_the_salary_wins_over_a_benefit_in_the_same_post() -> None:
+    text = (
+        "Salary: $90,000 - $110,000 per year.\n"
+        "$500 home office stipend.\n"
+        "401(k) match up to $6,000/year."
+    )
+
+    found = find_salary(text)
+
+    assert found is not None and found.value == Salary(90_000, 110_000, "USD", Y)
+
+
+@pytest.mark.parametrize("suffix", ["CAN", "CAD"])
+def test_a_dollar_sign_with_can_or_cad_in_the_sentence_is_canadian(suffix: str) -> None:
+    found = find_salary(f"Competitive salary ($140K-$180K {suffix}) and stock options")
+
+    assert found is not None and found.value.currency == "CAD"
+    assert (found.value.minimum, found.value.maximum) == (140_000, 180_000)
+
+
+def test_lower_case_can_or_an_explicit_usd_does_not_make_it_canadian() -> None:
+    plain = find_salary("Salary $140K-$180K, and you can apply today")
+    explicit = find_salary("Salary $140K-$180K USD, open to CAN residents")
+
+    assert plain is not None and plain.value.currency == "USD"
+    assert explicit is not None and explicit.value.currency == "USD"

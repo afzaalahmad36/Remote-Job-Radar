@@ -193,15 +193,65 @@ def test_names_are_matched_in_punctuation_and_dotted_forms() -> None:
     ]
 
 
-def test_the_stack_is_capped_at_30() -> None:
-    names = (
-        "python java rust ruby php dart scala kotlin swift elixir erlang haskell clojure sql react "
-        "vue svelte angular django flask fastapi laravel symfony flutter graphql redis mysql "
-        "mongodb kafka rabbitmq celery pandas numpy pytorch tensorflow docker"
-    )
+def test_a_post_naming_more_than_12_technologies_reports_none() -> None:
+    twelve = "python java rust ruby php dart scala kotlin swift elixir erlang haskell"
+    capitalised = " ".join(word.capitalize() for word in (twelve + " clojure").split())
 
-    assert len(names.split()) > 30
-    assert len(find_stack(names)) == 30
+    assert len(find_stack(twelve.title())) == 12  # the limit itself is still a stack
+    assert find_stack(capitalised) == []  # one more is a recruiter's category list
+
+
+def test_the_same_technology_named_many_times_counts_once_towards_the_limit() -> None:
+    assert find_stack("Python " * 40) == ["Python"]
+
+
+def test_a_customer_list_does_not_count_as_stack() -> None:
+    text = "Trusted by OpenAI, PayPal and Stripe. We build with Python and Docker."
+
+    assert find_stack(text) == ["Python", "Docker"]
+
+
+def test_a_customer_list_phrase_ends_with_its_sentence() -> None:
+    assert find_stack("Used by millions. Our backend is Django.") == ["Django"]
+    assert find_stack("Clients include Shopify and Stripe.") == []
+
+
+def test_an_alternative_phrase_does_not_count_as_stack() -> None:
+    assert find_stack("A Shopify alternative for small shops, built in Rust.") == ["Rust"]
+    assert find_stack("An alternative to Firebase, written in golang.") == ["Go"]
+    assert find_stack("We chose Postgres instead of MongoDB.") == ["PostgreSQL"]
+
+
+def test_a_technology_named_in_a_customer_list_and_elsewhere_still_counts() -> None:
+    assert find_stack("Trusted by OpenAI. You will use OpenAI APIs daily.") == ["OpenAI"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We value swift execution.",
+        "iron rust is orange and a rust belt town.",
+        "a ruby red gem, celery sticks, a flask of tea and unreal beauty.",
+        "no jest in the dart game on the rails.",
+    ],
+)
+def test_ambiguous_english_words_are_not_technologies_in_lower_case(text: str) -> None:
+    assert find_stack(text) == []
+
+
+def test_a_capitalised_ambiguous_word_at_the_start_of_a_sentence_still_counts() -> None:
+    # Known limit: a capital letter cannot tell "Swift fingers" from the language.
+    assert find_stack("Swift fingers wanted.") == ["Swift"]
+
+
+def test_ambiguous_words_count_when_capitalised() -> None:
+    text = "Experience with Swift, Rust and Ruby required. Celery and Flask are a plus."
+
+    assert find_stack(text) == ["Swift", "Rust", "Ruby", "Celery", "Flask"]
+
+
+def test_unambiguous_names_still_count_in_lower_case() -> None:
+    assert find_stack("python and django") == ["Python", "Django"]
 
 
 def test_canonical_name_maps_spellings_to_the_dictionary_name() -> None:
@@ -282,3 +332,83 @@ def test_an_empty_post_gives_an_empty_result() -> None:
 def test_found_reports_whether_it_is_high_confidence() -> None:
     assert Found("x", Confidence.HIGH).is_high is True
     assert Found("x", Confidence.LOW).is_high is False
+
+
+# --- title cleanup ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("headline", "title", "company"),
+    [
+        ("Acme: Backend Engineer ($90-$170/hr)", "Backend Engineer", "Acme"),
+        ("Acme: Web Developer (Fresh graduate welcome, WFH policy)", "Web Developer", "Acme"),
+        ("Acme: Developer (on-job-training provided)", "Developer", "Acme"),
+        ("Acme: FULL TIME: Software Engineer", "Software Engineer", "Acme"),
+        ("FULL TIME: Software Engineer", "Software Engineer", None),
+        ("Part-time - Data Analyst", "Data Analyst", None),
+        ("Backend Engineer ($120k/yr) (Remote)", "Backend Engineer", None),
+        ("Acme: AI Engineer (Conversational AI)", "AI Engineer (Conversational AI)", "Acme"),
+    ],
+)
+def test_a_price_or_perk_parenthetical_and_an_employment_prefix_are_not_the_title(
+    headline: str, title: str, company: str | None
+) -> None:
+    result = extract_with_rules(post(headline, "Details follow."))
+
+    assert result.title is not None and result.title.value == title
+    assert (result.company.value if result.company else None) == company
+
+
+def test_a_title_made_only_of_noise_is_kept_as_it_was() -> None:
+    result = extract_with_rules(post("Engineer (welcome)", "Details follow."))
+
+    assert result.title is not None and result.title.value == "Engineer"
+
+
+def test_seniority_is_read_from_the_cleaned_title() -> None:
+    graduate = extract_with_rules(post("Acme: Web Developer (Fresh graduate welcome)", "Hi."))
+    junior = extract_with_rules(post("Acme: Junior Web Developer (graduates welcome)", "Hi."))
+
+    assert graduate.seniority is None  # "graduate" lived in the perk parenthetical
+    assert junior.seniority == Found(Seniority.JUNIOR, Confidence.HIGH)
+
+
+# --- WFH ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Work From Home (WFH) option available one day per week.",
+        "We have a WFH policy.",
+        "WFH is optional.",
+        "Occasional WFH.",
+        "WFH allowance of a few dollars.",
+        "WFH two days a week.",
+    ],
+)
+def test_an_occasional_wfh_is_not_a_remote_job(body: str) -> None:
+    assert extract_with_rules(post("Developer", body)).remote_policy is None
+
+
+def test_a_plain_wfh_is_remote() -> None:
+    result = extract_with_rules(post("Developer", "This is a WFH role."))
+
+    assert result.remote_policy == Found(RemotePolicy.REMOTE, Confidence.HIGH)
+
+
+def test_one_firm_wfh_mention_wins_over_an_occasional_one() -> None:
+    body = "WFH policy applies.\nThe job itself is WFH."
+
+    assert extract_with_rules(post("Developer", body)).remote_policy == Found(
+        RemotePolicy.REMOTE, Confidence.HIGH
+    )
+
+
+def test_a_link_with_remote_in_its_address_is_not_a_remote_signal() -> None:
+    link = "Apply: https://weworkremotely.com/remote-jobs/acme-web-developer"
+
+    assert extract_with_rules(post("Web Developer", link)).remote_policy is None
+    assert extract_with_rules(
+        post("Web Developer", link + "\nFully remote.")
+    ).remote_policy == Found(RemotePolicy.REMOTE, Confidence.HIGH)
