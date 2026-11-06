@@ -21,7 +21,7 @@ from app.extraction.types import Confidence, Found
 from app.ingestion.text import MAX_TEXT_CHARS
 from app.models import RemotePolicy, Seniority
 
-RULES_VERSION = "rules_v1"  # stored in jobs.extraction_rules_version; bump when the rules change
+RULES_VERSION = "rules_v2"  # stored in jobs.extraction_rules_version; bump when the rules change
 MAX_HEADLINE_CHARS = 250
 MAX_TITLE_CHARS = 150
 MAX_URLS_SCANNED = 100
@@ -185,9 +185,20 @@ _REMOTE = re.compile(
     r"|\bremote[- ](?:first|only|friendly)\b"
     r"|\bwork\s+(?:from\s+anywhere|remotely)\b"
     r"|\bremote\s+(?:position|job|role|work|opportunity)\b"
-    r"|\b(?:is|are|be)\s+remote\b|\bwfh\b|\banywhere\s+in\s+the\s+world\b",
+    r"|\b(?:is|are|be)\s+remote\b|\banywhere\s+in\s+the\s+world\b",
     re.IGNORECASE,
 )
+# "WFH" says the job is remote unless the line makes it an occasional perk ("WFH option one day
+# per week", "WFH policy", "home office allowance").
+_WFH = re.compile(r"\bwfh\b", re.IGNORECASE)
+_OCCASIONAL = re.compile(
+    r"\boptions?\b|\boptional\b|\boccasional(?:ly)?\b|\bpolicy\b|\ballowance\b|\bstipend\b"
+    r"|\b(?:one|two|three|\d)\s+days?\s+(?:a|per|each|every)\s+(?:week|month)\b"
+    r"|\bdays?\s+(?:a|per|each|every)\s+(?:week|month)\b",
+    re.IGNORECASE,
+)
+_LINE_CHARS = 200
+_URL_TEXT = re.compile(r"https?://\S+", re.IGNORECASE)
 _HYBRID = re.compile(r"\bhybrid\b", re.IGNORECASE)
 _ONSITE = re.compile(r"\bon[- ]?site\b|\bin[- ]office\b|\boffice[- ]based\b", re.IGNORECASE)
 _NOT_REMOTE = re.compile(
@@ -198,11 +209,28 @@ _NOT_ONSITE = re.compile(r"\b(?:no|not|without)\s+(?:an?\s+)?(?:on[- ]?site|in[-
 _ANY_REMOTE = re.compile(r"\bremote\b", re.IGNORECASE)
 
 
+def _firm_wfh(text: str) -> bool:
+    """True if some "WFH" mention is not an occasional option."""
+    for match in _WFH.finditer(text):
+        before = text[max(0, match.start() - _LINE_CHARS) : match.start()]
+        line = before[before.rfind("\n") + 1 :]
+        after = text[match.end() : match.end() + _LINE_CHARS]
+        line += match.group() + after.split("\n", 1)[0]
+        if not _OCCASIONAL.search(line):
+            return True
+    return False
+
+
 def _remote_policy(text: str) -> Found[RemotePolicy] | None:
-    """Explicit phrases give HIGH; a bare "remote" gives LOW; mixed signals give nothing."""
+    """Explicit phrases give HIGH; a bare "remote" gives LOW; mixed signals give nothing.
+
+    Links are ignored: a job board's address ("weworkremotely.com/remote-jobs/...") says nothing
+    about this job.
+    """
+    text = _URL_TEXT.sub(" ", text)
     not_remote = _NOT_REMOTE.search(text) is not None
     signals: set[RemotePolicy] = set()
-    if _REMOTE.search(text) and not not_remote:
+    if (_REMOTE.search(text) or _firm_wfh(text)) and not not_remote:
         signals.add(RemotePolicy.REMOTE)
     if _HYBRID.search(text):
         signals.add(RemotePolicy.HYBRID)
