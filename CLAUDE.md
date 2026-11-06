@@ -351,6 +351,9 @@ uv run python -m scripts.eval_label --source-name "My Feed" --n 30 --seed 1
 # seniority, salary, stack). Reads only each post's id and text (read-only, same guard), never an
 # extraction, no provider request. Copies the file to labels.clean-v1.json first (never overwritten),
 # prints every change and asks "Write these changes? [y/N]" before writing.
+# --dry-run prints the same table and writes nothing (no backup, no question). Optional per-post
+# overrides in .local/eval/label_overrides.json (git-ignored, keyed by the post's position: title,
+# company, stack, seniority, or "keep": [fields] to leave a field as labelled) win over the rules.
 uv run python -m scripts.eval_fix_labels
 # Then score: the stored extraction and the rules recomputed offline, against your labels. It reads
 # the database, makes ZERO provider requests (it refuses --allow-provider and builds no client) and
