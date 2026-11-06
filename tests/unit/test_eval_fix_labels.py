@@ -5,6 +5,7 @@ used, and the fixer never touches a stored or recomputed extraction.
 """
 
 import ast
+import json
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -18,15 +19,19 @@ from scripts import eval_fix_labels as fix
 from scripts.db_guard import ScriptError
 from scripts.eval_fix_labels import (
     Change,
+    Override,
     PostFix,
     Review,
     Session,
+    company_spellings,
     entry_names,
     fix_post,
     format_changes,
     format_counts,
     format_lists,
     format_reviews,
+    load_overrides,
+    overrides_kept,
     periods_near,
     plan_fixes,
     run_fix,
@@ -926,6 +931,307 @@ def test_main_runs_the_fixer_and_reports_errors_with_exit_two(
     save_label_file(path, label_file(entry(messy())))
     fake_reader(monkeypatch, {1: TEXT})
     assert fix.main(["--labels", str(path)], session("n", [])) == 1
+
+
+# --- per-post overrides --------------------------------------------------------------------------
+
+
+def override(**values: object) -> Override:
+    return Override.model_validate(values)
+
+
+def test_an_override_knows_which_fields_it_sets_and_which_it_keeps() -> None:
+    result = override(title="T", seniority=None, keep=["company"])
+
+    assert result.values() == {"title": "T", "seniority": None}  # an explicit null still counts
+    assert result.locked() == {"title", "seniority", "company"}
+    assert override(keep=["stack"]).values() == {}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"title": "T", "keep": ["title"]},  # set and kept
+        {"salary_min": 5},  # not an overridable field
+        {"keep": ["salary_min"]},
+        {"stack": "Python"},
+    ],
+)
+def test_an_invalid_override_is_refused(bad: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        override(**bad)
+
+
+def write_overrides(path: Path, data: object) -> Path:
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_overrides_are_loaded_by_post_number(tmp_path: Path) -> None:
+    path = write_overrides(
+        tmp_path / "o.json",
+        {"2": {"title": "T", "company": "C"}, "1": {"keep": ["company"], "seniority": None}},
+    )
+
+    loaded = load_overrides(path, 2)
+
+    assert set(loaded) == {1, 2}
+    assert loaded[2].values() == {"title": "T", "company": "C"}
+
+
+def test_a_missing_overrides_file_means_no_overrides(tmp_path: Path) -> None:
+    assert load_overrides(tmp_path / "nope.json", 5) == {}
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ([1, 2], "not a valid overrides file"),
+        ({"x": {"title": "T"}}, "not a valid overrides file"),
+        ({"1": {"surprise": 1}}, "not a valid overrides file"),
+        ({"1": {"title": "T", "keep": ["title"]}}, "not a valid overrides file"),
+        ({"0": {"title": "T"}}, "no labelled post 0"),
+        ({"4": {"title": "T"}, "9": {"title": "T"}}, "no labelled post 4, 9"),
+    ],
+)
+def test_a_bad_overrides_file_is_an_error(tmp_path: Path, data: object, message: str) -> None:
+    with pytest.raises(ScriptError, match=message):
+        load_overrides(write_overrides(tmp_path / "o.json", data), 3)
+
+
+def test_an_unreadable_overrides_file_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "o.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ScriptError, match="not a valid overrides file"):
+        load_overrides(path, 3)
+
+
+def test_an_override_sets_the_fields_and_is_shown_with_the_rule_override() -> None:
+    result = fixed_with(messy(), override(title="Chosen Title", company="Chosen Co"))
+
+    assert (result.labels.title, result.labels.company) == ("Chosen Title", "Chosen Co")
+    rows = [(c.field, c.before, c.after, c.rule) for c in result.changes if c.rule == "override"]
+    assert rows == [
+        ("title", "Acme Corp: Senior Backend Engineer", "Chosen Title", "override"),
+        ("company", "Acme", "Chosen Co", "override"),
+    ]
+    assert not [c for c in result.changes if c.rule == fix.RULE_HEADLINE]  # the rule skipped them
+
+
+def fixed_with(labels: Labels, chosen: Override, text: str = TEXT) -> PostFix:
+    return fix_post(1, labels, text, NO_ALIASES, chosen)
+
+
+def test_an_override_wins_over_the_headline_for_only_the_fields_it_sets() -> None:
+    result = fixed_with(messy(), override(title="Chosen Title"))
+
+    assert result.labels.title == "Chosen Title"
+    assert result.labels.company == "Acme Corp"  # the headline rule still ran for the company
+
+
+def test_kept_fields_are_left_exactly_as_labelled_and_get_no_row() -> None:
+    result = fixed_with(messy(), override(keep=["company"]))
+
+    assert result.labels.company == "Acme"
+    assert result.labels.title == "Senior Backend Engineer"  # the other field still follows rules
+    assert not [c for c in result.changes if c.field == "company"]
+
+
+def test_keeping_title_and_company_skips_the_headline_check_and_its_review() -> None:
+    bad_headline = "Backend Engineer at Acme\n\nbody"
+
+    kept = fixed_with(messy(), override(keep=["title", "company"]), bad_headline)
+    not_kept = fixed_with(messy(), override(keep=["title"]), bad_headline)
+
+    assert kept.reviews == []
+    assert [r.field for r in not_kept.reviews] == ["title, company"]  # company is still undecided
+
+
+def test_a_set_seniority_is_final_even_null() -> None:
+    result = fixed_with(
+        messy(seniority=Seniority.LEAD), override(title="Applied AI Engineer", seniority=None)
+    )
+
+    assert result.labels.seniority is None
+    assert ("seniority", "lead", "(none)", "override") in [
+        (c.field, c.before, c.after, c.rule) for c in result.changes
+    ]
+    assert not [c for c in result.changes if c.rule == fix.RULE_SENIORITY]
+
+
+def test_seniority_follows_the_overridden_title_when_it_is_not_set() -> None:
+    result = fixed_with(
+        messy(title="Engineer", seniority=None), override(title="Senior Independent Developer")
+    )
+
+    assert result.labels.seniority == Seniority.SENIOR
+
+
+def test_the_seniority_guard_still_sees_a_level_word_an_override_drops() -> None:
+    result = fixed_with(
+        messy(title="Senior Engineer", seniority=Seniority.SENIOR), override(title="Engineer")
+    )
+
+    assert result.labels.seniority == Seniority.SENIOR
+    assert [r.field for r in result.reviews] == ["seniority"]
+
+
+def test_a_stack_override_replaces_the_stack_and_the_rules_skip_it() -> None:
+    result = fixed_with(messy(stack=["Python", "Rust"]), override(stack=[]))
+
+    assert result.labels.stack == []
+    assert [(c.field, c.before, c.after, c.rule) for c in result.changes if c.field == "stack"] == [
+        ("stack", "Python, Rust", "(none)", "override")  # one row for the whole stack
+    ]
+    assert not [c for c in result.changes if c.rule == fix.RULE_STACK]
+
+
+def test_a_kept_stack_is_not_trimmed_even_when_entries_are_missing() -> None:
+    result = fixed_with(messy(stack=["Rust", "Zig"]), override(keep=["stack"]))
+
+    assert result.labels.stack == ["Rust", "Zig"]
+
+
+def test_an_override_that_adds_a_stack_entry_is_refused_by_the_write_guard() -> None:
+    original = label_file(entry(messy(stack=["Python"])))
+    plan = plan_fixes(original, texts(j1=TEXT), NO_ALIASES, {1: override(stack=["Python", "Go"])})
+
+    with pytest.raises(ScriptError, match="added or reordered"):
+        verify_only_allowed_changes(original, plan.fixed)
+
+
+def test_overrides_are_looked_up_by_the_posts_position_among_labelled_posts() -> None:
+    skip = skipped(5)
+    original = label_file(skip, entry(messy(), job=1), entry(messy(), job=2))
+
+    plan = plan_fixes(original, texts(j1=TEXT, j2=TEXT), NO_ALIASES, {2: override(title="Second")})
+
+    first, second = (e.labels for e in plan.fixed.posts if e.labels)
+    assert first is not None and second is not None
+    assert (first.title, second.title) == ("Senior Backend Engineer", "Second")
+    assert {c.post for c in plan.changes if c.rule == "override"} == {2}
+
+
+def test_the_counts_include_the_override_rule() -> None:
+    lines = format_counts([Change(2, "title", "a", "b", fix.RULE_OVERRIDE)])
+
+    assert "  rule override: 1 change(s) in 1 post(s)" in lines
+
+
+def test_kept_fields_are_listed() -> None:
+    lines = overrides_kept({3: override(keep=["title", "company"]), 1: override(title="T")})
+
+    assert lines == ["  KEPT as labelled: post 3: title, company"]
+
+
+# --- company spelling ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "text", "expected"),
+    [
+        ("A.Team", "A·Team: Engineer\n\nA·Team builds.", ["A·Team"]),
+        ("A·Team", "A.Team: Engineer", ["A.Team"]),
+        ("A·Team", "A·Team: Engineer", []),  # the label is in the text exactly
+        ("Acme Corp", "ACME CORP hires", ["ACME CORP"]),
+        ("Acme", "Beta hires", []),
+        ("...", "anything", []),
+    ],
+)
+def test_the_posts_own_spelling_of_the_company_is_reported(
+    label: str, text: str, expected: list[str]
+) -> None:
+    assert company_spellings(label, text) == expected
+
+
+def test_spelling_notes_appear_in_the_plan_and_the_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = "A·Team: Engineer\n\nWe use Python. A·Team is remote."
+    path = tmp_path / "labels.json"
+    save_label_file(path, label_file(entry(messy(company="A.Team", stack=["Python"]), text)))
+    fake_reader(monkeypatch, {1: text})
+    lines: list[str] = []
+
+    run_fix(path, SETTINGS, session("n", lines), dry_run=True)
+
+    output = "\n".join(lines)
+    assert "COMPANY SPELLING" in output
+    assert "post 1: label 'A.Team'; the post spells it ['A·Team']" in output
+    assert "A·Team" in [
+        c.after for c in plan_fixes(load_label_file(path), texts(j1=text), {}).changes
+    ]
+
+
+# --- the command with overrides ------------------------------------------------------------------
+
+
+def test_the_command_reads_overrides_beside_the_labels_and_prints_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, label_file(entry(messy())))
+    write_overrides(tmp_path / "label_overrides.json", {"1": {"title": "Chosen Title"}})
+    fake_reader(monkeypatch, {1: TEXT})
+    lines: list[str] = []
+
+    run_fix(path, SETTINGS, session("n", lines))
+
+    output = "\n".join(lines)
+    assert "Overrides: 1 post(s) from" in output
+    assert "Chosen Title" in output and "override" in output
+
+
+def test_an_overrides_file_outside_the_posts_is_refused_before_anything_is_copied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, label_file(entry(messy())))
+    other = write_overrides(tmp_path / "mine.json", {"7": {"title": "T"}})
+    asked = fake_reader(monkeypatch, {1: TEXT})
+
+    with pytest.raises(ScriptError, match="no labelled post 7"):
+        run_fix(path, SETTINGS, session("y", []), overrides_path=other)
+
+    assert asked == []
+    assert not (tmp_path / "labels.clean-v1.json").exists()
+
+
+def test_a_dry_run_shows_the_table_and_touches_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, label_file(entry(messy())))
+    write_overrides(tmp_path / "label_overrides.json", {"1": {"title": "Chosen Title"}})
+    before = path.read_bytes()
+    fake_reader(monkeypatch, {1: TEXT})
+    lines: list[str] = []
+
+    code = run_fix(path, SETTINGS, session("y", lines), dry_run=True)
+
+    assert code == 0
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["label_overrides.json", "labels.json"]
+    assert not any(line.startswith("ASKED") for line in lines)
+    assert any("Chosen Title" in line for line in lines)
+
+
+def test_main_accepts_the_overrides_and_dry_run_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "labels.json"
+    save_label_file(path, label_file(entry(messy())))
+    chosen = write_overrides(tmp_path / "x.json", {"1": {"company": "Chosen Co"}})
+    fake_reader(monkeypatch, {1: TEXT})
+    monkeypatch.setattr(fix, "get_settings", lambda: SETTINGS)
+    lines: list[str] = []
+
+    code = fix.main(
+        ["--labels", str(path), "--overrides", str(chosen), "--dry-run"], session("y", lines)
+    )
+
+    assert code == 0 and any("Chosen Co" in line for line in lines)
 
 
 # --- no provider, no extraction ------------------------------------------------------------------

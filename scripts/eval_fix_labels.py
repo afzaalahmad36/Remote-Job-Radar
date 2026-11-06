@@ -40,6 +40,7 @@ holds post numbers and rule codes only.
 
 import argparse
 import asyncio
+import json
 import re
 import shutil
 import sys
@@ -50,6 +51,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from app.core.config import Settings, get_settings
 from app.extraction.stack import spellings
@@ -96,7 +100,19 @@ RULE_AMOUNT = "3 amount not in text"
 RULE_PERIOD = "3 period word"
 RULE_NO_AMOUNTS = "3 no amount left"
 RULE_STACK = "4 not in text"
-RULES = (RULE_HEADLINE, RULE_SENIORITY, RULE_AMOUNT, RULE_PERIOD, RULE_NO_AMOUNTS, RULE_STACK)
+RULE_OVERRIDE = "override"
+RULES = (
+    RULE_HEADLINE,
+    RULE_SENIORITY,
+    RULE_AMOUNT,
+    RULE_PERIOD,
+    RULE_NO_AMOUNTS,
+    RULE_STACK,
+    RULE_OVERRIDE,
+)
+OVERRIDES_NAME = "label_overrides.json"  # beside the labels file; .local/ is git-ignored
+OVERRIDABLE = ("title", "company", "stack", "seniority")
+Overridable = Literal["title", "company", "stack", "seniority"]
 
 NEEDS_HUMAN = "NEEDS_HUMAN"
 SALARY_REMOVED = "SALARY_AMOUNT_REMOVED"
@@ -122,6 +138,56 @@ _PERIOD_WORD = re.compile(
 _SENTENCE_END = re.compile(r"[.!?]\s|\n")
 _SEPARATORS = r"[\s.\-_]*"  # what may sit between the letters of a name: "Next.js" = "NextJS"
 _VENDOR_PREFIXES = ("apache ", "amazon ", "aws ", "google ", "microsoft ", "azure ", "gcp ")
+
+
+class Override(BaseModel):
+    """What the user decided for one post. A field set here is final: the rules skip it.
+
+    `title`, `company`, `stack` and `seniority` set the label (an explicit `null` clears it);
+    `keep` lists fields to leave exactly as labelled. A field cannot be both.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    company: str | None = None
+    stack: list[str] | None = None
+    seniority: str | None = None
+    keep: list[Overridable] = []
+
+    @model_validator(mode="after")
+    def _set_or_keep(self) -> Self:
+        both = set(self.values()) & set(self.keep)
+        if both:
+            raise ValueError(f"{', '.join(sorted(both))} is both set and kept")
+        return self
+
+    def values(self) -> dict[str, object]:
+        """The fields this override sets, with their values."""
+        return {name: getattr(self, name) for name in OVERRIDABLE if name in self.model_fields_set}
+
+    def locked(self) -> frozenset[str]:
+        """Fields the rules must not touch: the ones set and the ones kept."""
+        return frozenset(self.values()) | frozenset(self.keep)
+
+
+def load_overrides(path: Path, post_count: int) -> dict[int, Override]:
+    """Read the overrides file: {"<post number>": {...}}. A missing file means no overrides."""
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("the top level must be an object")
+        found = {int(key): Override.model_validate(value) for key, value in raw.items()}
+    except (OSError, ValueError, ValidationError) as error:
+        detail = type(error).__name__
+        raise ScriptError(f"{path} is not a valid overrides file ({detail})") from None
+    outside = sorted(number for number in found if not 1 <= number <= post_count)
+    if outside:
+        listed = ", ".join(str(n) for n in outside)
+        raise ScriptError(f"{path}: no labelled post {listed} (there are {post_count})")
+    return found
 
 
 @dataclass(frozen=True)
@@ -152,6 +218,8 @@ class PostFix:
 
 
 def _show(value: object) -> str:
+    if isinstance(value, tuple | list):  # a stack
+        value = ", ".join(value)
     return "(none)" if value is None or value == "" else str(value)
 
 
@@ -219,8 +287,16 @@ def _longer_spelling(current: str | None, company: str, folded: str) -> bool:
 
 
 def _headline_step(
-    number: int, labels: Labels, text: str, folded: str, reviews: list[Review]
+    number: int,
+    labels: Labels,
+    text: str,
+    folded: str,
+    reviews: list[Review],
+    locked: frozenset[str] = frozenset(),
 ) -> Labels:
+    """Title and company from the headline, except a field the user's override has settled."""
+    if {"title", "company"} <= locked:
+        return labels
     line = headline(text)
     problem = headline_problem(line)
     parts = split_headline(text)
@@ -232,7 +308,8 @@ def _headline_step(
     company, title = parts
     if _longer_spelling(labels.company, company, folded):
         company = labels.company or company
-    return _replace(labels, company=company, title=title)
+    updates = {"company": company, "title": title}
+    return _replace(labels, **{k: v for k, v in updates.items() if k not in locked})
 
 
 # --- rule 2: seniority ---------------------------------------------------------------------------
@@ -416,7 +493,10 @@ def _stack_step(
     folded: str,
     aliases: Mapping[str, tuple[str, ...]],
     out: PostFix,
+    locked: frozenset[str] = frozenset(),
 ) -> Labels:
+    if "stack" in locked:
+        return labels
     missing = [e for e in labels.stack if not entry_in_text(e, folded, aliases)]
     if not missing:
         return labels
@@ -447,21 +527,43 @@ def _record(
             )
 
 
-def fix_post(
-    number: int, labels: Labels, text: str, aliases: Mapping[str, tuple[str, ...]]
-) -> PostFix:
-    """Apply rules 1 to 4 to one post, in order. Reads only the labels and the post text."""
+def _apply_override(number: int, labels: Labels, override: Override | None) -> PostFix:
+    """Start from the user's decision: set fields are applied now and shown as `override` rows."""
     result = PostFix(labels)
+    if override is None or not override.values():
+        return result
+    result.labels = _replace(labels, **override.values())
+    for name in override.values():
+        before, after = getattr(labels.values(), name), getattr(result.labels.values(), name)
+        result.changes.append(Change(number, name, _show(before), _show(after), RULE_OVERRIDE))
+    return result
+
+
+def fix_post(
+    number: int,
+    labels: Labels,
+    text: str,
+    aliases: Mapping[str, tuple[str, ...]],
+    override: Override | None = None,
+) -> PostFix:
+    """Apply the user's override, then rules 1 to 4 to the fields it left alone.
+
+    Reads only the labels and the post text. A field an override sets (or keeps) is never changed
+    by a rule; seniority is still worked out from the final title, override included.
+    """
+    result = _apply_override(number, labels, override)
+    locked = override.locked() if override else frozenset()
     folded, lined = fold(text), fold_lines(text)
 
     def step(rule: str, fields: Sequence[str], new: Labels) -> None:
         _record(result.changes, number, result.labels, new, rule, fields)
         result.labels = new
 
-    new = _headline_step(number, labels, text, folded, result.reviews)
+    new = _headline_step(number, result.labels, text, folded, result.reviews, locked)
     step(RULE_HEADLINE, ("title", "company"), new)
-    new = _seniority_step(number, labels, result.labels, headline(text), result.reviews)
-    step(RULE_SENIORITY, ("seniority",), new)
+    if "seniority" not in locked:
+        new = _seniority_step(number, labels, result.labels, headline(text), result.reviews)
+        step(RULE_SENIORITY, ("seniority",), new)
 
     salary = _salary_step(number, result.labels, text, lined, result.flags, result.reviews)
     rest = (
@@ -475,7 +577,7 @@ def fix_post(
     )
     result.labels = salary
 
-    result.labels = _stack_step(number, result.labels, folded, aliases, result)
+    result.labels = _stack_step(number, result.labels, folded, aliases, result, locked)
     return result
 
 
@@ -488,14 +590,33 @@ class FixPlan:
     changes: list[Change]
     lists: dict[str, list[tuple[int, str]]]  # list name -> (post number, reason)
     reviews: list[Review]
+    spellings: list[str] = field(default_factory=list)  # company spelled differently in the post
+
+
+def company_spellings(company: str, text: str) -> list[str]:
+    """Spellings of the company in the post that differ from the label only in other characters.
+
+    "A.Team" and "A·Team" are the same letters with a different separator: the letters of the
+    label are searched in order, with up to two non-letters between them.
+    """
+    letters = [char for char in company if char.isalnum()]
+    if not letters or company in text:
+        return []
+    pattern = re.compile(r"[^\w\n]{0,2}".join(re.escape(char) for char in letters), re.IGNORECASE)
+    found = dict.fromkeys(match.group() for match in pattern.finditer(text))
+    return [spelling for spelling in found if spelling != company][:3]
 
 
 def plan_fixes(
-    label_file: LabelFile, texts: Mapping[uuid.UUID, str], aliases: Mapping[str, tuple[str, ...]]
+    label_file: LabelFile,
+    texts: Mapping[uuid.UUID, str],
+    aliases: Mapping[str, tuple[str, ...]],
+    overrides: Mapping[int, Override] | None = None,
 ) -> FixPlan:
     posts: list[LabelEntry] = []
     changes: list[Change] = []
     reviews: list[Review] = []
+    notes: list[str] = []
     lists: dict[str, list[tuple[int, str]]] = defaultdict(list)
     number = 0
     for entry in label_file.posts:
@@ -509,7 +630,11 @@ def plan_fixes(
             reviews.append(Review(number, "(whole post)", "(not touched)", why))
             posts.append(entry)
             continue
-        fixed = fix_post(number, entry.labels, text, aliases)
+        fixed = fix_post(number, entry.labels, text, aliases, (overrides or {}).get(number))
+        if entry.labels.company and (found := company_spellings(entry.labels.company, text)):
+            notes.append(
+                f"post {number}: label {entry.labels.company!r}; the post spells it {found!r}"
+            )
         changes.extend(fixed.changes)
         reviews.extend(fixed.reviews)
         for name, reason in fixed.flags:
@@ -519,7 +644,7 @@ def plan_fixes(
         posts.append(entry.model_copy(update={"labels": fixed.labels}))
     fixed_file = label_file.model_copy(update={"posts": posts})
     _list_identical(fixed_file, lists)
-    return FixPlan(fixed_file, changes, dict(lists), reviews)
+    return FixPlan(fixed_file, changes, dict(lists), reviews, notes)
 
 
 def _list_identical(label_file: LabelFile, lists: dict[str, list[tuple[int, str]]]) -> None:
@@ -597,6 +722,15 @@ def format_counts(changes: Sequence[Change]) -> list[str]:
     return lines
 
 
+def overrides_kept(overrides: Mapping[int, Override]) -> list[str]:
+    """Lines for fields the user said to leave as labelled (no table row: nothing changes)."""
+    return [
+        f"  KEPT as labelled: post {number}: {', '.join(override.keep)}"
+        for number, override in sorted(overrides.items())
+        if override.keep
+    ]
+
+
 def format_lists(lists: Mapping[str, Sequence[tuple[int, str]]]) -> list[str]:
     lines = []
     for name in (SALARY_REMOVED, INFO, IDENTICAL):
@@ -623,6 +757,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Correct the labels from the post text (title, seniority, salary, stack).",
     )
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS_PATH)
+    parser.add_argument(
+        "--overrides",
+        type=Path,
+        default=None,
+        help=f"decisions per post that win over the rules (default: {OVERRIDES_NAME} by --labels)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the changes and stop: no backup, no question, nothing written",
+    )
     return parser
 
 
@@ -632,35 +777,57 @@ class Session:
     out: Callable[[str], None] = field(default=print)
 
 
-def _show_plan(plan: FixPlan, session: Session) -> None:
+def _show_plan(plan: FixPlan, session: Session, overrides: Mapping[int, Override]) -> None:
     if plan.changes:
         session.out("\n".join(format_changes(plan.changes)))
     session.out(f"\n{len(plan.changes)} change(s):")
     for line in format_counts(plan.changes):
         session.out(line)
-    for line in format_lists(plan.lists):
+    for line in [*overrides_kept(overrides), *format_lists(plan.lists)]:
         session.out(line)
+    if plan.spellings:
+        session.out(
+            "\nCOMPANY SPELLING (label vs the post's own text; the headline rule uses the post's)"
+        )
+        for line in plan.spellings:
+            session.out("  " + line)
     session.out(f"  {NEEDS_HUMAN}: {len(plan.reviews)} item(s); nothing in that table is written")
     if plan.reviews:
         session.out("\n" + NEEDS_HUMAN + "\n" + "\n".join(format_reviews(plan.reviews)))
 
 
-def run_fix(labels_path: Path, settings: Settings, session: Session) -> int:
+def run_fix(
+    labels_path: Path,
+    settings: Settings,
+    session: Session,
+    overrides_path: Path | None = None,
+    dry_run: bool = False,
+) -> int:
     """Plan, show, ask, write, re-check. Reads the database read-only."""
     if not labels_path.is_file():
         raise ScriptError(f"{labels_path} does not exist")
     label_file = load_label_file(labels_path)
     target = database_target(settings.database_url)  # refuses the wrong database up front
-    backup, created = back_up(labels_path)
-    session.out(f"Backup: {backup} ({'written' if created else 'already there, kept as it is'})")
+    posts = sum(entry.labels is not None for entry in label_file.posts)
+    overrides_path = overrides_path or labels_path.with_name(OVERRIDES_NAME)
+    overrides = load_overrides(overrides_path, posts)
+    session.out(f"Overrides: {len(overrides)} post(s) from {overrides_path}")
+    if dry_run:
+        session.out("Dry run: no backup, no question, nothing is written.")
+    else:
+        backup, created = back_up(labels_path)
+        state = "written" if created else "already there, kept as it is"
+        session.out(f"Backup: {backup} ({state})")
     session.out(f"Reading post text (read-only) from database {target}")
     ids = [entry.job_id for entry in label_file.posts if entry.labels is not None]
     texts = dict(asyncio.run(read_posts_by_id(settings.database_url, ids)))
     aliases = load_policy(DEFAULT_POLICY_PATH).aliases
 
-    plan = plan_fixes(label_file, texts, aliases)
+    plan = plan_fixes(label_file, texts, aliases, overrides)
     verify_only_allowed_changes(label_file, plan.fixed)
-    _show_plan(plan, session)
+    _show_plan(plan, session, overrides)
+    if dry_run:
+        return 0
     if not plan.changes:
         session.out("Nothing to change.")
         return 0
@@ -685,7 +852,9 @@ def run_fix(labels_path: Path, settings: Settings, session: Session) -> int:
 def main(argv: Sequence[str] | None = None, session: Session | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return run_fix(args.labels, get_settings(), session or Session())
+        return run_fix(
+            args.labels, get_settings(), session or Session(), args.overrides, args.dry_run
+        )
     except ScriptError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
