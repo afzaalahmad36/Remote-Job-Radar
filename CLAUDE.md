@@ -99,7 +99,7 @@ job-radar/
 │   ├── integration/
 │   ├── conftest.py
 │   └── factories.py
-├── scripts/                    # manual CLI helpers: try_extraction, eval_label, eval_* (never run by CI or app code)
+├── scripts/                    # manual CLI helpers: try_extraction, eval_label, eval_*, recompute_extractions (never run by CI or app code)
 └── frontend/                   # Next.js app
 ```
 
@@ -223,6 +223,20 @@ way. The labels were corrected from the post text alone, before any scoring, by
 words found in the text, stack entries not in the text removed and none added; `remote_policy` is
 left as labelled). It reads only each post's id and text, never an extraction. The earlier versions
 are kept as `labels.raw.json` (before the stack cleaner) and `labels.clean-v1.json` (before this fix).
+
+**Second pass over the labels.** After the first accuracy run was diagnosed, the labels were completed
+a second time by `scripts/eval_complete_labels.py`, under rules fixed in the script before it ran and
+described in its docstring: a missing salary amount or currency is filled only when the post states it
+(`CAN`/`CAD` gives CAD), and a stack entry is added only when it is on the allow-list or in the stack
+dictionary, appears as a whole word in the post outside a customer list or an "X alternative" phrase,
+is not on the deny list, and the post names 12 or fewer technologies (swift, rust, ruby, unreal, dart,
+flask, rails, celery and jest need a capital letter, and are flagged in the change table). It reads
+only each post's id and text, never imports the extractor's rules, and keeps the first-pass labels as
+`labels.pass1.json`. **The first-pass score is kept and reported next to the second-pass score**
+(`docs/ACCURACY.md`), because the first-pass labels left out technologies and salary parts the post
+states, so part of the first run's errors were label omissions, but the second-pass rules were written
+after seeing the diagnosis and mirror some of the extractor's `rules_v2` rules; a score on the
+completed labels is therefore not independent evidence, and the first-pass score stays the baseline.
 
 **A post parses correctly when all of these hold:**
 1. Title: the system has one and it matches the label.
@@ -359,6 +373,17 @@ uv run python -m scripts.eval_fix_labels
 # the database, makes ZERO provider requests (it refuses --allow-provider and builds no client) and
 # writes a run record without post text or labels under .local/eval/runs/.
 uv run python -m scripts.try_extraction --eval .local/eval/labels.json
+# Second pass over the labels (rules in the script's docstring and in section 6). Same read-only
+# guard, id and text only, no provider request. --dry-run prints the change table and writes nothing;
+# without it the script shows the table, asks "Write these changes? [y/N]", copies the labels to
+# labels.pass1.json (never overwritten) and then writes. Score the first-pass labels first.
+uv run python -m scripts.eval_complete_labels --dry-run
+# One-off after a rules version change: reset old rules-only rows (never rows the model touched) so
+# the extraction sweep recomputes them. It refuses to write without --confirm-backup-taken (its
+# --help shows the pg_dump commands and says to check the file size), only touches a local database
+# named jobradar, resets in batches (logged) and leaves extraction_retries alone. --dry-run prints
+# counts only and needs no flag. Beat and a worker must run for the sweep to recompute the rows.
+uv run python -m scripts.recompute_extractions --dry-run
 # Connectivity ping: ONE real request with fixed text (no database, no stored post) to check the key,
 # endpoint and request shape. It shows the body field names and asks for confirmation. Levels:
 # 1 = model + input + generation_config; 2 = + system_instruction + store=false; 3 = + the JSON-schema
@@ -482,7 +507,7 @@ Never commit `.env` or Telegram session files. Keep them in `.gitignore`.
 
 **Deferred: Telegram ingestion.** It needs a Telegram API application and a user session, and the owner has only a personal account for now. The `SourceFetcher` interface and the `telegram` source type are in place so it can be added later without touching the rest of the pipeline. Phase 2 is otherwise complete.
 
-**Current phase:** 3 — rules-first extraction. Done: rules, merge, schema, provider-agnostic client with the Gemini adapter, the manual `scripts/try_extraction.py` (its `--ping` levels 1-3 were run against the real Gemini API by the owner with gemini-3.5-flash-lite, level 3 validated against `JobExtraction`). The DB state (extraction columns, `llm_usage`, migration), the service's rules phase (hash reuse, compare-and-set writes), the model path (request budgets, throttle, reservation rows, shared cooldown, validation retry, stack grounding), the Celery task `extract_job`, the post-ingest hook, the extraction sweep and `POST /jobs/{id}/extract` are built and tested with fakes only; the kill switch is off, so no real provider has been asked by the pipeline. The accuracy evaluation tooling is built (`scripts/eval_label.py` to label blind, `try_extraction.py --eval` to score, the pass rule in section 6); no post has been labelled yet. Next: the owner labels 30 posts and runs `--eval`, then decides when to turn the kill switch on (a `.env` edit) and compares; an optional read-only change to hide `not_a_job` in `GET /jobs`. The Ollama adapter comes on request.
+**Current phase:** 3 — rules-first extraction. Done: rules, merge, schema, provider-agnostic client with the Gemini adapter, the manual `scripts/try_extraction.py` (its `--ping` levels 1-3 were run against the real Gemini API by the owner with gemini-3.5-flash-lite, level 3 validated against `JobExtraction`). The DB state (extraction columns, `llm_usage`, migration), the service's rules phase (hash reuse, compare-and-set writes), the model path (request budgets, throttle, reservation rows, shared cooldown, validation retry, stack grounding), the Celery task `extract_job`, the post-ingest hook, the extraction sweep and `POST /jobs/{id}/extract` are built and tested with fakes only; the kill switch is off, so no real provider has been asked by the pipeline. The accuracy evaluation tooling is built (`scripts/eval_label.py` to label blind, `try_extraction.py --eval` to score, the pass rule in section 6); 30 posts have been labelled and scored (numbers and run records in `docs/ACCURACY.md`): the 90% target was not met, and `rules_v2` came out of the diagnosis of that run. `scripts/recompute_extractions.py` resets old rules-only rows so the sweep redoes them, and `scripts/eval_complete_labels.py` completes the labels in a second pass. Next: the owner takes a backup, runs the recompute, scores the first-pass labels again and then the completed ones, fills the table in `docs/ACCURACY.md`, and decides when to turn the kill switch on (a `.env` edit) and compares; an optional read-only change to hide `not_a_job` in `GET /jobs`. The Ollama adapter comes on request.
 
 ---
 
