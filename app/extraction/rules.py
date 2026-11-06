@@ -66,6 +66,33 @@ _HIRING = re.compile(
 _WORD = re.compile(r"[a-z]+")
 
 
+# Things a headline appends or prefixes that are not part of the job title: "FULL TIME: ",
+# "(Fresh graduate welcome, WFH policy)", "($90-$170/hr)".
+_EMPLOYMENT_PREFIX = re.compile(
+    r"(?:(?:full|part)[- ]?time\s*[:\-–—|]|(?:contract|freelance|permanent|temporary)\s*:)\s*",
+    re.IGNORECASE,
+)
+_TAIL_PAREN = re.compile(r"\s*\((?P<inner>[^()]{0,100})\)\s*$")
+_PAREN_NOISE = re.compile(
+    r"[$€£₹]\s?\d|/\s?(?:hr|hour|yr|year|mo|month)\b|\bwelcome\b|\bwfh\b|\bwork from home\b"
+    r"|\btraining\b",
+    re.IGNORECASE,
+)
+
+
+def _drop_employment_prefix(text: str) -> str:
+    match = _EMPLOYMENT_PREFIX.match(text)
+    return text[match.end() :] if match and match.end() < len(text) else text
+
+
+def _clean_title(title: str) -> str:
+    """The title without a leading employment type or a trailing price / perks parenthetical."""
+    cleaned = _drop_employment_prefix(title)
+    while (tail := _TAIL_PAREN.search(cleaned)) and _PAREN_NOISE.search(tail["inner"]):
+        cleaned = cleaned[: tail.start()]
+    return cleaned.strip(" -–—|:,") or title
+
+
 def _has_role(text: str) -> bool:
     return any(word in _ROLE_WORDS for word in _WORD.findall(text.lower()))
 
@@ -80,12 +107,13 @@ def _title_and_company(text: str) -> tuple[Found[str] | None, Found[str] | None]
     # The RSS fetcher stores "title\n\nbody": a blank line after the first line means it is a
     # title, not just the first sentence of a body.
     is_headline = not rest.strip() or rest.startswith("\n")
-    title, company = _from_headline(_tidy(head[:MAX_HEADLINE_CHARS]))
+    title, company = _from_headline(_drop_employment_prefix(_tidy(head[:MAX_HEADLINE_CHARS])))
+    title = _clean_title(title) if title else title
     title_found = None
     if title and len(title) <= MAX_TITLE_CHARS:
         title_found = Found(title, Confidence.HIGH if is_headline else Confidence.LOW)
     if title_found is None and (labelled := _LABELLED_TITLE.search(text)):
-        title_found = Found(_tidy(labelled["v"]), Confidence.HIGH)
+        title_found = Found(_clean_title(_tidy(labelled["v"])), Confidence.HIGH)
     company_found = Found(company, Confidence.LOW) if company else None
     if labelled_company := _LABELLED_COMPANY.search(text):
         company_found = Found(_tidy(labelled_company["v"]), Confidence.HIGH)
