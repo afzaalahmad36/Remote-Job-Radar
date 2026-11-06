@@ -67,6 +67,40 @@ _SALARY_WORDS = re.compile(
 _UP_TO = re.compile(r"(?:up\s*to|max(?:imum)?)\W*$", re.IGNORECASE)
 _FROM = re.compile(r"(?:from|starting(?:\s+at)?|min(?:imum)?|at\s+least)\W*$", re.IGNORECASE)
 
+# A sentence about a benefit ("401(k) with 100% employer match (up to $6,000/year)", "$500 home
+# office stipend") holds money that is not the salary. It is skipped unless the same sentence also
+# uses a word that is clearly about pay ("base salary $120k plus a bonus" stays a salary).
+_BENEFIT_WORDS = re.compile(
+    r"401\s?\(?k\)?|\bemployer match|\bmatch(?:ing)?\b|\ballowance|\bstipend|\breimburs"
+    r"|\bper diem\b|\bbonus",
+    re.IGNORECASE,
+)
+_PAY_WORDS = re.compile(
+    r"salary|\bbase\b|compensation|\bpay\b|remuneration|\bote\b|\bctc\b|\bwages?\b|\bearn",
+    re.IGNORECASE,
+)
+_SENTENCE_CHARS = 150  # how far a sentence is searched on each side of an amount
+_CANADIAN = re.compile(r"\b(?:CAD|CAN)\b")  # upper case only: "can" is a common word
+_US_DOLLAR = re.compile(r"\bUSD\b")
+
+
+def _sentence(text: str, start: int, end: int) -> str:
+    """The sentence (or line) holding text[start:end], searched within a bounded window."""
+    left = text[max(0, start - _SENTENCE_CHARS) : start]
+    cut = max(left.rfind(". "), left.rfind("! "), left.rfind("? "), left.rfind("\n"))
+    right = text[end : end + _SENTENCE_CHARS]
+    stops = [
+        i
+        for i in (right.find(". "), right.find("! "), right.find("? "), right.find("\n"))
+        if i >= 0
+    ]
+    return left[cut + 1 :] + text[start:end] + right[: min(stops) if stops else len(right)]
+
+
+def _is_benefit(sentence: str) -> bool:
+    return _BENEFIT_WORDS.search(sentence) is not None and _PAY_WORDS.search(sentence) is None
+
+
 # What one period's amount can sensibly be; outside it the number is something else (a count, an
 # id, a typo) and is not reported. No period stated: assume it is a yearly figure.
 _PLAUSIBLE: dict[SalaryPeriod | None, tuple[int, int]] = {
@@ -185,6 +219,11 @@ def _single(text: str, amount: _Amount) -> tuple[int, Found[Salary]] | None:
 def _candidate(
     text: str, start: int, end: int, low: int | None, high: int | None, currency: str
 ) -> tuple[int, Found[Salary]] | None:
+    sentence = _sentence(text, start, end)
+    if _is_benefit(sentence):
+        return None
+    if currency == "USD" and _CANADIAN.search(sentence) and not _US_DOLLAR.search(sentence):
+        currency = "CAD"  # "$140K-$180K CAN": the dollar sign is a Canadian dollar
     period = _period_near(text, start, end)
     floor, ceiling = _PLAUSIBLE[period]
     if any(v is not None and not floor <= v <= ceiling for v in (low, high)):
