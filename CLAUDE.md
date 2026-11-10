@@ -225,8 +225,10 @@ left as labelled). It reads only each post's id and text, never an extraction. T
 are kept as `labels.raw.json` (before the stack cleaner) and `labels.clean-v1.json` (before this fix).
 
 **Second pass over the labels.** After the first accuracy run was diagnosed, the labels were completed
-a second time by `scripts/eval_complete_labels.py`, under rules fixed in the script before it ran and
-described in its docstring: a missing salary amount or currency is filled only when the post states it
+a second time by `scripts/eval_complete_labels.py`, under rules fixed in the script before anything was
+written and described in its docstring (the stack rules were revised once after a first dry-run showed
+false adds, such as a company name or a "Go-To-Market" read as a technology; the labels were not
+written before that revision, and the script has a `--max-adds-per-post` safety limit): a missing salary amount or currency is filled only when the post states it
 (`CAN`/`CAD` gives CAD), and a stack entry is added only when it is on the allow-list or in the stack
 dictionary, appears as a whole word in the post outside a customer list or an "X alternative" phrase,
 is not on the deny list, and the post names 12 or fewer technologies (swift, rust, ruby, unreal, dart,
