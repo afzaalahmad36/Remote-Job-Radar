@@ -61,7 +61,10 @@ Notes on the filled cells:
 listed in the script's docstring and in `CLAUDE.md`): a missing salary amount or currency is filled
 only when the post states it, and a technology is added only when it is a known product named in
 the post as a whole word, outside a customer list or an "X alternative" phrase, in a post that names
-12 or fewer technologies. The first-pass labels are kept, and both scores are reported, because the
+12 or fewer technologies. The stack rules were revised once, after a first dry-run (nothing written)
+showed false adds: a company named in the headline, a name such as "Spark Capital" or "Maven
+Clinic", "Go-To-Market" read as Go, and a technology the post says the role is not about. A post that
+would gain more than 8 entries goes to a human instead. The first-pass labels are kept, and both scores are reported, because the
 second-pass rules were written after the first run had been diagnosed and part of them mirrors rules
 the extractor now has. A score on the completed labels is therefore not independent evidence.
 
