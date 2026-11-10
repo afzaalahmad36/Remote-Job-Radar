@@ -19,6 +19,7 @@ from scripts.eval_complete_labels import (
     complete_salary,
     complete_stack,
     find_candidates,
+    format_changes,
     known_technologies,
     plan_completion,
     run_complete,
@@ -30,8 +31,16 @@ from tests.settings_helpers import settings_with
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SETTINGS = settings_with(database_url="postgresql+asyncpg://u:secret@db:5432/jobradar")
-POLICY = Policy(allow=frozenset({"decagon"}), deny=frozenset({"llm"}), fragments=frozenset())
-ALLOW = ["Decagon"]  # the allow-list as written in the policy file (the casing is kept)
+POLICY = Policy(
+    allow=frozenset({"decagon", "databricks", "maven"}),
+    deny=frozenset({"llm"}),
+    fragments=frozenset(),
+)
+ALLOW = [
+    "Decagon",
+    "Databricks",
+    "Maven",
+]  # the allow-list as written in the policy file (the casing is kept)
 TECHNOLOGIES = known_technologies(POLICY, ALLOW)
 
 
@@ -40,9 +49,9 @@ def salary_of(labels: Labels, text: str) -> tuple[Labels, PostResult]:
     return complete_salary(1, labels, text, result), result
 
 
-def stack_of(labels: Labels, text: str) -> tuple[Labels, PostResult]:
+def stack_of(labels: Labels, text: str, max_adds: int = 8) -> tuple[Labels, PostResult]:
     result = PostResult(labels)
-    return complete_stack(1, labels, text, TECHNOLOGIES, result), result
+    return complete_stack(1, labels, text, TECHNOLOGIES, result, max_adds), result
 
 
 # --- salary --------------------------------------------------------------------------------------
@@ -215,11 +224,11 @@ def test_an_alternative_phrase_is_not_a_mention() -> None:
 
 
 def test_twelve_technologies_are_added_and_thirteen_are_not() -> None:
-    twelve = "python java rust ruby php dart scala kotlin swift elixir erlang haskell".title()
-    labels, result = stack_of(Labels(), twelve)
+    twelve = "Python, Java, Rust, Ruby, PHP, Dart, Scala, Kotlin, Swift, Elixir, Erlang, Haskell"
+    labels, result = stack_of(Labels(), twelve, max_adds=20)
     assert len(labels.stack) == 12 and not result.reviews
 
-    labels, result = stack_of(Labels(), twelve + " Clojure")
+    labels, result = stack_of(Labels(), twelve + ", Clojure", max_adds=20)
     assert labels.stack == []
     assert "13 technologies" in result.reviews[0].shows
 
@@ -255,6 +264,185 @@ def test_a_technology_the_label_already_holds_under_another_spelling_is_not_adde
     labels, _ = stack_of(Labels(stack=["Apache Airflow", "postgres"]), text)
 
     assert labels.stack == ["Apache Airflow", "postgres", "Docker"]
+
+
+# --- stack: words that look like a technology but are not one here --------------------------------
+
+
+def test_the_company_named_in_the_headline_is_not_a_technology() -> None:
+    text = "Databricks: Data Platform Engineer" + chr(10) + "You will build pipelines in Python."
+
+    labels, result = stack_of(Labels(), text)
+
+    assert labels.stack == ["Python"]
+    assert any(
+        "'Databricks' not added: the company named in the headline" in i for i in result.infos
+    )
+
+
+def test_the_company_in_the_headline_counts_when_the_body_names_it_as_a_technology() -> None:
+    text = "Databricks: Data Engineer" + chr(10) + "You will use Databricks and Python daily."
+
+    labels, _ = stack_of(Labels(), text)
+
+    assert labels.stack == ["Databricks", "Python"]
+
+
+@pytest.mark.parametrize(
+    "word", ["Capital", "Clinic", "Catalog", "Catalogue", "Ventures", "Partners"]
+)
+def test_a_technology_followed_by_a_name_word_is_a_name_not_a_technology(word: str) -> None:
+    labels, result = stack_of(Labels(), f"We were funded by Spark {word} last year.")
+
+    assert labels.stack == []
+    assert any("part of a proper name" in info for info in result.infos)
+
+
+def test_unity_catalog_and_maven_clinic_are_not_unity_and_maven() -> None:
+    labels, _ = stack_of(Labels(), "Maven Clinic runs on Unity Catalog and Spark Capital money.")
+
+    assert labels.stack == []
+
+
+@pytest.mark.parametrize(
+    "text", ["A Go-To-Market plan.", "Our go-to-market team.", "A Python-based tool."]
+)
+def test_a_word_touching_a_hyphen_is_part_of_a_phrase(text: str) -> None:
+    labels, result = stack_of(Labels(), text)
+
+    assert labels.stack == []
+    assert any("hyphenated" in info for info in result.infos) or "Go-To" in text
+
+
+def test_a_capitalised_word_in_a_run_of_capitalised_words_is_a_name() -> None:
+    labels, result = stack_of(
+        Labels(), "Maven Health Group raised money. Senior Python Developer wanted."
+    )
+
+    assert labels.stack == []
+    assert sum("multi-word capitalised name" in info for info in result.infos) == 2
+
+
+def test_a_capitalised_word_next_to_lower_case_words_or_other_technologies_still_counts() -> None:
+    labels, _ = stack_of(Labels(), "Experience with Maven builds.")
+    assert labels.stack == ["Maven"]
+
+    labels, _ = stack_of(Labels(), "Stack: Python Django PostgreSQL")  # a list, not a name
+    assert labels.stack == ["Python", "Django", "PostgreSQL"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A go-to-market lead and Go to market plans.",
+        "Go beyond the usual.",
+        "We use Python and Go.",  # one other technology and no comma: not a list
+    ],
+)
+def test_go_without_a_list_go_paren_or_golang_is_not_the_language(text: str) -> None:
+    labels, _ = stack_of(Labels(), text)
+
+    assert "Go" not in labels.stack
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Backend in Python, Go and Docker.",
+        "Stack: Python/Go/Docker",
+        "Experience with Go (the language) is a plus.",
+        "We write Go; the golang toolchain is great.",
+    ],
+)
+def test_go_is_the_language_in_a_list_as_go_paren_or_next_to_golang(text: str) -> None:
+    labels, _ = stack_of(Labels(), text)
+
+    assert "Go" in labels.stack
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "This role is NOT about WordPress sites.",
+        "Everything except WordPress is in scope.",
+        "We do it all, excluding WordPress.",
+        "We maintain a simple WordPress blog.",
+        "The role isn't about WordPress.",
+    ],
+)
+def test_a_sentence_saying_the_role_is_not_about_it_adds_nothing(text: str) -> None:
+    labels, result = stack_of(Labels(), text)
+
+    assert labels.stack == []
+    assert any("not, except, excluding or simple" in info for info in result.infos)
+
+
+def test_a_negation_only_affects_its_own_sentence() -> None:
+    labels, _ = stack_of(Labels(), "This is not a sales role. We use WordPress.")
+
+    assert labels.stack == ["WordPress"]
+
+
+def test_the_cases_from_the_first_dry_run_together_add_only_the_real_technologies() -> None:
+    text = (
+        "Databricks: Data Platform Engineer\n"
+        "We are backed by Spark Capital. Maven Clinic partners with us. Our Go-To-Market team "
+        "uses Unity Catalog; this role is NOT about WordPress sites.\n"
+        "You will write Python and Docker code."
+    )
+
+    labels, _ = stack_of(Labels(), text)
+
+    assert labels.stack == ["Python", "Docker"]
+
+
+# --- stack: the match type and the safety limit ---------------------------------------------------
+
+
+def test_every_added_entry_shows_its_sentence_and_how_it_matched() -> None:
+    text = "Stack: Python, Django, Docker.\nWe deploy with Kubernetes.\nWe use Redis and Kafka."
+
+    _, result = stack_of(Labels(), text)
+
+    kinds = {c.after: c.match for c in result.changes}
+    assert kinds["+ Python"] == "list"
+    assert kinds["+ Kubernetes"] == "standalone"
+    assert kinds["+ Redis"] == "other"
+    table = format_changes(result.changes)
+    assert "match" in table[0] and "sentence" in table[0]
+    assert any("list" in row and "Stack: Python, Django, Docker" in row for row in table)
+
+
+def test_a_salary_row_shows_a_dash_in_the_match_column() -> None:
+    _, result = salary_of(Labels(), "Salary: $90,000 - $120,000 a year")
+
+    assert format_changes(result.changes)[2].split(" | ")[5].strip() == "-"
+
+
+NINE = "Python, Java, Docker, Django, Kubernetes, Terraform, PostgreSQL, Redis, Kafka"
+
+
+def test_a_post_that_would_gain_more_entries_than_the_limit_goes_to_the_human_table() -> None:
+    labels, result = stack_of(Labels(), NINE, max_adds=8)
+
+    assert labels.stack == [] and not result.changes
+    assert "9 entries would be added (over 8): none added" in result.reviews[0].shows
+
+    labels, result = stack_of(Labels(), NINE, max_adds=9)
+    assert len(labels.stack) == 9 and not result.reviews
+
+
+def test_entries_the_label_already_holds_do_not_count_toward_the_limit() -> None:
+    labels, result = stack_of(Labels(stack=["Python"]), NINE, max_adds=8)
+
+    assert len(labels.stack) == 9 and not result.reviews
+
+
+def test_the_limit_is_an_option_with_a_default_of_eight_and_zero_is_refused(tmp_path: Path) -> None:
+    assert complete.build_parser().parse_args([]).max_adds_per_post == 8
+    assert complete.build_parser().parse_args(["--max-adds-per-post", "3"]).max_adds_per_post == 3
+    with pytest.raises(ScriptError, match="at least 1"):
+        complete.run_complete(tmp_path / "x.json", SETTINGS, Session(), max_adds=0)
 
 
 # --- the whole pass and its write guard ----------------------------------------------------------

@@ -38,8 +38,24 @@ Rules, applied to every labelled post. A component that is already filled is nev
       12 or fewer distinct technologies in all (more: nothing is added, NEEDS_HUMAN). The words
       swift, rust, ruby, unreal, dart, flask, rails, celery and jest count only when a mention
       starts with a capital letter; those rows are marked FLAG in the table.
+      Revised once, after the first dry-run showed false adds (nothing had been written): a
+      mention does not count when
+      * a hyphen touches it ("Go-To-Market", "go-to-market", "Python-based");
+      * it is the company in the headline, the first line's "Company: Role" (a mention in the body
+        still counts);
+      * the next word is capital, clinic, catalog, catalogue, ventures or partners;
+      * it is capitalised and a neighbouring word is also capitalised ("Maven Health"), unless that
+        neighbour is itself a technology ("Python Django") or the pair is a dictionary name
+        ("React Native");
+      * it is a bare "Go" with no list (a comma or slash and two other technologies in the
+        sentence), no "Go (" and no "golang" within 60 characters;
+      * its sentence says not, n't, except, excluding or simple.
+      A technology whose mentions were all thrown out is listed as INFO with the first reason. A
+      post that would gain more than --max-adds-per-post (default 8) entries gets none: NEEDS_HUMAN.
 
-A change table (with the sentence behind every stack entry) and the NEEDS_HUMAN table go to your
+A change table (with the sentence behind every stack entry and its match type: list = commas or
+slashes and two other technologies in the sentence, standalone = no other technology in it,
+other = the rest) and the NEEDS_HUMAN table go to your
 terminal only. Then one question: "Write these changes? [y/N]". Before writing, the labels are
 copied to `<name>.pass1.json` (an existing copy is never overwritten); after writing, the same
 checks as `eval_clean_labels.py --check-labels` run again and only post numbers and codes print.
@@ -54,6 +70,7 @@ import tomllib
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from app.core.config import Settings, get_settings
@@ -76,6 +93,10 @@ from scripts.eval_scoring import stack_key
 
 BACKUP_SUFFIX = ".pass1"
 MAX_TECHNOLOGIES = 12
+DEFAULT_MAX_ADDS = 8
+GO = "go"
+# A word after a technology that makes it part of a company or product name ("Spark Capital").
+NAME_FOLLOWERS = frozenset("capital clinic catalog catalogue ventures partners".split())
 CAPITALISED_ONLY = frozenset("swift rust ruby unreal dart flask rails celery jest".split())
 SHOWN_CHARS = 160
 LOOKBACK_CHARS = 120
@@ -127,6 +148,7 @@ class Change:
     after: str
     rule: str
     note: str = ""
+    match: str = ""  # stack only: list, standalone or other
 
 
 @dataclass(frozen=True)
@@ -333,21 +355,159 @@ def known_technologies(policy: Policy, allow_names: Sequence[str]) -> list[Techn
 
 
 @dataclass(frozen=True)
+class Vocabulary:
+    """Every technology spelling as one pattern, to count the technologies named in a sentence."""
+
+    pattern: re.Pattern[str]
+    owner: Mapping[str, str]  # folded spelling -> technology name
+    spellings: frozenset[str]  # every folded spelling, to tell a technology word from a name word
+
+    def others(self, sentence: str, own: str) -> set[str]:
+        """Other technologies in `sentence` (a bare "go" and lower-case swift do not count)."""
+        found: set[str] = set()
+        for match in self.pattern.finditer(sentence):
+            word = fold(match.group())
+            if word == GO or (word in CAPITALISED_ONLY and not match.group()[0].isupper()):
+                continue
+            found.add(self.owner[word])
+        found.discard(own)
+        return found
+
+
+@lru_cache(maxsize=4)
+def build_vocabulary(technologies: tuple[Technology, ...]) -> Vocabulary:
+    """Built once per technology list (`lru_cache` remembers the result for the same argument)."""
+    owner = {fold(s): t.name for t in technologies for s in t.spellings}
+    longest_first = sorted(owner, key=len, reverse=True)
+    alternatives = "|".join(re.escape(spelling) for spelling in longest_first)
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9.])(?:{alternatives})(?![A-Za-z0-9])(?!\.[A-Za-z0-9])", re.IGNORECASE
+    )
+    return Vocabulary(pattern, owner, frozenset(owner))
+
+
+@dataclass(frozen=True)
 class Mention:
     technology: Technology
     position: int
     sentence: str
     ambiguous_capitalised: bool
+    match_type: str
 
 
-def _mentions(text: str, technology: Technology) -> tuple[list[Mention], bool]:
-    """Mentions that count, and whether an ambiguous word was seen only in lower case.
+@dataclass
+class Found:
+    """What `_mentions` saw: the mentions that count, and why the others were thrown out."""
 
-    A mention is a whole word (not inside "Node.js" or "react.js"), not in a customer list and not
-    an alternative phrase. Ambiguous words need a capital letter.
+    mentions: list[Mention] = field(default_factory=list)
+    only_lower: bool = False  # an ambiguous word seen only in lower case
+    skipped: list[str] = field(default_factory=list)
+
+
+_HYPHEN_BEFORE = re.compile(r"[A-Za-z0-9]-$")
+_HYPHEN_AFTER = re.compile(r"-[A-Za-z0-9]")
+_NEXT_WORD = re.compile(r" ([A-Za-z]+)")
+_TITLE_BEFORE = re.compile(r"(?<![A-Za-z0-9])([A-Z][a-z0-9]+) $")
+_TITLE_AFTER = re.compile(r" ([A-Z][a-z0-9]+)(?![A-Za-z0-9])")
+_GO_PAREN = re.compile(r" ?\(")
+_NEGATION = re.compile(r"\b(?:not|except|excluding|simple)\b|n['’]t\b", re.IGNORECASE)
+
+
+def _hyphenated(text: str, start: int, end: int) -> bool:
+    """A hyphen touches the word: "Go-To-Market", "go-to-market", "Python-based"."""
+    return bool(
+        _HYPHEN_BEFORE.search(text[max(0, start - 2) : start]) or _HYPHEN_AFTER.match(text, end)
+    )
+
+
+def _before_a_name_word(text: str, end: int) -> bool:
+    """The next word is one that makes a company or product name ("Spark Capital")."""
+    following = _NEXT_WORD.match(text, end, end + 25)
+    return bool(following and following.group(1).lower() in NAME_FOLLOWERS)
+
+
+def _in_capitalised_name(text: str, start: int, end: int, vocab: Vocabulary) -> bool:
+    """A capitalised word next to another capitalised word ("Maven Clinic", "Spark Capital").
+
+    It is a name only when the neighbour is not a technology itself ("Python Django" is a list)
+    and the two words together are not a dictionary or allow-list name ("React Native").
     """
-    found: list[Mention] = []
-    only_lower = False
+    shown = text[start:end]
+    if not shown[0].isupper():
+        return False
+    before = _TITLE_BEFORE.search(text[max(0, start - 30) : start])
+    after = _TITLE_AFTER.match(text, end, end + 30)
+    pairs = []
+    if before:
+        pairs.append((before.group(1), f"{before.group(1)} {shown}"))
+    if after:
+        pairs.append((after.group(1), f"{shown} {after.group(1)}"))
+    return any(
+        fold(word) not in vocab.spellings and fold(phrase) not in vocab.spellings
+        for word, phrase in pairs
+    )
+
+
+def _is_company_in_headline(text: str, start: int, end: int) -> bool:
+    """The mention is the company in the headline's "Company: Role" (the first line)."""
+    offset = len(text) - len(text.lstrip())
+    first_line = text[offset:].split("\n", 1)[0]
+    colon = first_line.find(":")
+    if colon < 0 or start >= offset + colon:
+        return False
+    return fold(first_line[:colon]) == fold(text[start:end])
+
+
+def _has_list_shape(sentence: str, technology: Technology, vocab: Vocabulary) -> bool:
+    """Commas or slashes in the sentence and at least two other technologies named in it."""
+    separated = "," in sentence or "/" in sentence
+    return separated and len(vocab.others(sentence, technology.name)) >= 2
+
+
+def _go_without_context(
+    text: str, match: re.Match[str], sentence: str, technology: Technology, vocab: Vocabulary
+) -> bool:
+    """A bare "Go" is the language only in a list, as "Go (", or next to "golang"."""
+    if fold(match.group()) != GO:
+        return False
+    nearby = text[max(0, match.start() - 60) : match.end() + 60].lower()
+    in_parens = bool(_GO_PAREN.match(text, match.end(), match.end() + 2))
+    return not (in_parens or "golang" in nearby or _has_list_shape(sentence, technology, vocab))
+
+
+def _match_type(sentence: str, technology: Technology, vocab: Vocabulary) -> str:
+    """list = commas or slashes and two other technologies; standalone = no other technology."""
+    if _has_list_shape(sentence, technology, vocab):
+        return "list"
+    return "other" if vocab.others(sentence, technology.name) else "standalone"
+
+
+def _skip_reason(
+    text: str, match: re.Match[str], sentence: str, technology: Technology, vocab: Vocabulary
+) -> str | None:
+    """Why this mention does not count, or None when it does."""
+    start, end = match.span()
+    if _hyphenated(text, start, end):
+        return "inside a hyphenated phrase"
+    if _is_company_in_headline(text, start, end):
+        return "the company named in the headline"
+    if _before_a_name_word(text, end):
+        return "part of a proper name"
+    if _in_capitalised_name(text, start, end, vocab):
+        return "part of a multi-word capitalised name"
+    if _go_without_context(text, match, sentence, technology, vocab):
+        return "'Go' with no list, 'Go (' or golang near it"
+    if _NEGATION.search(sentence):
+        return "the sentence says not, except, excluding or simple"
+    return None
+
+
+def _mentions(text: str, technology: Technology, vocab: Vocabulary) -> Found:
+    """Mentions that count. A mention is a whole word (not inside "Node.js" or "react.js"), not in
+    a customer list, not an alternative phrase, and not thrown out by `_skip_reason`. Ambiguous
+    words need a capital letter."""
+    found = Found()
+    lower_only = False
     for spelling in dict.fromkeys(technology.spellings):
         ambiguous = normal(spelling) in CAPITALISED_ONLY
         pattern = rf"(?<![A-Za-z0-9.]){re.escape(spelling)}(?![A-Za-z0-9])(?!\.[A-Za-z0-9])"
@@ -355,11 +515,20 @@ def _mentions(text: str, technology: Technology) -> tuple[list[Mention], bool]:
             if _is_reference(text, match.start(), match.end()):
                 continue
             if ambiguous and not match.group()[0].isupper():
-                only_lower = True
+                lower_only = True
                 continue
             sentence, _ = _sentence(text, match.start(), match.end())
-            found.append(Mention(technology, match.start(), _cut(sentence), ambiguous))
-    return sorted(found, key=lambda m: m.position), only_lower and not found
+            reason = _skip_reason(text, match, sentence, technology, vocab)
+            if reason:
+                found.skipped.append(reason)
+                continue
+            kind = _match_type(sentence, technology, vocab)
+            found.mentions.append(
+                Mention(technology, match.start(), _cut(sentence), ambiguous, kind)
+            )
+    found.mentions.sort(key=lambda m: m.position)
+    found.only_lower = lower_only and not found.mentions
+    return found
 
 
 def _whole(word: str, folded: str) -> bool:
@@ -380,40 +549,66 @@ def _already_in_label(technology: Technology, entries: Sequence[str]) -> bool:
     return False
 
 
-def complete_stack(
-    number: int, labels: Labels, text: str, technologies: Sequence[Technology], result: PostResult
-) -> Labels:
-    """Add the technologies the post names that the label left out (rule b)."""
+def _named_technologies(
+    number: int,
+    text: str,
+    technologies: Sequence[Technology],
+    result: PostResult,
+) -> list[tuple[Technology, list[Mention]]]:
+    """The technologies the post names (by a mention that counts); notes the ones thrown out."""
+    vocab = build_vocabulary(tuple(technologies))
     named: list[tuple[Technology, list[Mention]]] = []
     for technology in technologies:
-        mentions, only_lower = _mentions(text, technology)
-        if mentions:
-            named.append((technology, mentions))
-        elif only_lower:
+        found = _mentions(text, technology, vocab)
+        if found.mentions:
+            named.append((technology, found.mentions))
+        elif found.only_lower:
             result.infos.append(
                 f"post {number}: {technology.name!r} appears only in lower case: not added"
             )
+        elif found.skipped:
+            result.infos.append(f"post {number}: {technology.name!r} not added: {found.skipped[0]}")
+    return named
+
+
+def complete_stack(
+    number: int,
+    labels: Labels,
+    text: str,
+    technologies: Sequence[Technology],
+    result: PostResult,
+    max_adds: int = DEFAULT_MAX_ADDS,
+) -> Labels:
+    """Add the technologies the post names that the label left out (rule b)."""
+    named = _named_technologies(number, text, technologies, result)
     if len(named) > MAX_TECHNOLOGIES:
         shows = f"the post names {len(named)} technologies (over {MAX_TECHNOLOGIES}): none added"
         result.reviews.append(Review(number, "stack", f"{len(labels.stack)} entries", shows))
         return labels
-    added: list[str] = []
+    added: list[Change] = []
     for technology, mentions in sorted(named, key=lambda item: item[1][0].position):
-        if _already_in_label(technology, [*labels.stack, *added]):
+        if _already_in_label(technology, [*labels.stack, *(c.after[2:] for c in added)]):
             continue
         first = mentions[0]
         flag = "FLAG capitalised ambiguous word; " if first.ambiguous_capitalised else ""
-        change = Change(
-            number,
-            "stack",
-            "(not in label)",
-            f"+ {technology.name}",
-            RULE_STACK,
-            flag + first.sentence,
+        added.append(
+            Change(
+                number,
+                "stack",
+                "(not in label)",
+                f"+ {technology.name}",
+                RULE_STACK,
+                flag + first.sentence,
+                first.match_type,
+            )
         )
-        result.changes.append(change)
-        added.append(technology.name)
-    return labels.model_copy(update={"stack": [*labels.stack, *added]}) if added else labels
+    if len(added) > max_adds:
+        shows = f"{len(added)} entries would be added (over {max_adds}): none added"
+        result.reviews.append(Review(number, "stack", f"{len(labels.stack)} entries", shows))
+        return labels
+    result.changes.extend(added)
+    names = [change.after[2:] for change in added]
+    return labels.model_copy(update={"stack": [*labels.stack, *names]}) if names else labels
 
 
 # --- the whole pass ------------------------------------------------------------------------------
@@ -432,6 +627,7 @@ def plan_completion(
     texts: Mapping[uuid.UUID, str],
     policy: Policy,
     allow_names: Sequence[str],
+    max_adds: int = DEFAULT_MAX_ADDS,
 ) -> Plan:
     technologies = known_technologies(policy, allow_names)
     posts: list[LabelEntry] = []
@@ -452,7 +648,7 @@ def plan_completion(
             continue
         result = PostResult(entry.labels)
         result.labels = complete_salary(number, result.labels, text, result)
-        result.labels = complete_stack(number, result.labels, text, technologies, result)
+        result.labels = complete_stack(number, result.labels, text, technologies, result, max_adds)
         changes.extend(result.changes)
         reviews.extend(result.reviews)
         infos.extend(result.infos)
@@ -504,8 +700,10 @@ def _table(header: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> list[str
 
 
 def format_changes(changes: Sequence[Change]) -> list[str]:
-    rows = [(str(c.post), c.field, c.before, c.after, c.rule, c.note) for c in changes]
-    return _table(("post", "field", "before", "after", "rule", "sentence"), rows)
+    rows = [
+        (str(c.post), c.field, c.before, c.after, c.rule, c.match or "-", c.note) for c in changes
+    ]
+    return _table(("post", "field", "before", "after", "rule", "match", "sentence"), rows)
 
 
 def format_reviews(reviews: Sequence[Review]) -> list[str]:
@@ -532,6 +730,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS_PATH)
     parser.add_argument("--dry-run", action="store_true", help="show the table; write nothing")
+    parser.add_argument(
+        "--max-adds-per-post",
+        type=int,
+        default=DEFAULT_MAX_ADDS,
+        help=f"a post gaining more stack entries goes to NEEDS_HUMAN (default {DEFAULT_MAX_ADDS})",
+    )
     return parser
 
 
@@ -552,9 +756,15 @@ def _show_plan(plan: Plan, session: Session) -> None:
 
 
 def run_complete(
-    labels_path: Path, settings: Settings, session: Session, dry_run: bool = False
+    labels_path: Path,
+    settings: Settings,
+    session: Session,
+    dry_run: bool = False,
+    max_adds: int = DEFAULT_MAX_ADDS,
 ) -> int:
     """Plan, show, ask, write, re-check. Reads the database read-only."""
+    if max_adds < 1:
+        raise ScriptError("--max-adds-per-post must be at least 1")
     if not labels_path.is_file():
         raise ScriptError(f"{labels_path} does not exist")
     label_file = load_label_file(labels_path)
@@ -563,7 +773,8 @@ def run_complete(
     session.out(f"Reading post text (read-only) from database {target}")
     texts = dict(asyncio.run(read_posts_by_id(settings.database_url, ids)))
     policy = load_policy(DEFAULT_POLICY_PATH)
-    plan = plan_completion(label_file, texts, policy, load_allow_names(DEFAULT_POLICY_PATH))
+    allow_names = load_allow_names(DEFAULT_POLICY_PATH)
+    plan = plan_completion(label_file, texts, policy, allow_names, max_adds)
     verify_only_allowed_changes(label_file, plan.fixed)
     _show_plan(plan, session)
     if dry_run:
@@ -593,7 +804,13 @@ def run_complete(
 def main(argv: Sequence[str] | None = None, session: Session | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return run_complete(args.labels, get_settings(), session or Session(), args.dry_run)
+        return run_complete(
+            args.labels,
+            get_settings(),
+            session or Session(),
+            args.dry_run,
+            args.max_adds_per_post,
+        )
     except ScriptError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
