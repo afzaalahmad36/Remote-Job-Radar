@@ -269,19 +269,54 @@ def test_a_technology_the_label_already_holds_under_another_spelling_is_not_adde
 # --- stack: words that look like a technology but are not one here --------------------------------
 
 
-def test_the_company_named_in_the_headline_is_not_a_technology() -> None:
+def test_the_employer_named_in_the_headline_is_not_a_technology() -> None:
     text = "Databricks: Data Platform Engineer" + chr(10) + "You will build pipelines in Python."
 
     labels, result = stack_of(Labels(), text)
 
     assert labels.stack == ["Python"]
-    assert any(
-        "'Databricks' not added: the company named in the headline" in i for i in result.infos
-    )
+    assert "post 1: 'Databricks' not added: the employer's name" in result.infos
 
 
-def test_the_company_in_the_headline_counts_when_the_body_names_it_as_a_technology() -> None:
+def test_the_employer_is_ignored_in_the_body_too() -> None:
     text = "Databricks: Data Engineer" + chr(10) + "You will use Databricks and Python daily."
+
+    labels, result = stack_of(Labels(), text)
+
+    assert labels.stack == ["Python"]
+    assert result.infos.count("post 1: 'Databricks' not added: the employer's name") == 1
+
+
+@pytest.mark.parametrize(
+    "headline", ["Maven Clinic: Backend Engineer", "MAVEN CLINIC, Inc.: Backend Engineer"]
+)
+def test_a_technology_equal_to_the_first_word_of_the_employer_is_ignored(headline: str) -> None:
+    text = headline + chr(10) + "Our builds use Maven and we write Python."
+
+    labels, result = stack_of(Labels(), text)
+
+    assert labels.stack == ["Python"]
+    assert "post 1: 'Maven' not added: the employer's name" in result.infos
+
+
+def test_a_technology_inside_the_employer_but_not_its_first_word_is_still_added() -> None:
+    text = "Acme Maven: Engineer" + chr(10) + "We build with Maven."
+
+    labels, _ = stack_of(Labels(), text)
+
+    assert labels.stack == ["Maven"]
+
+
+def test_a_headline_without_a_colon_names_no_employer() -> None:
+    text = "Databricks" + chr(10) + "You will use Databricks and Python."
+
+    labels, _ = stack_of(Labels(), text)
+
+    assert labels.stack == ["Databricks", "Python"]
+
+
+def test_the_employer_rule_only_looks_at_the_first_line() -> None:
+    text = "Backend Engineer" + chr(10) + "Databricks: we use Databricks and Python."
 
     labels, _ = stack_of(Labels(), text)
 
