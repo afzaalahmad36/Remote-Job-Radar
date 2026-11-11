@@ -38,11 +38,11 @@ Rules, applied to every labelled post. A component that is already filled is nev
       12 or fewer distinct technologies in all (more: nothing is added, NEEDS_HUMAN). The words
       swift, rust, ruby, unreal, dart, flask, rails, celery and jest count only when a mention
       starts with a capital letter; those rows are marked FLAG in the table.
-      Revised once, after the first dry-run showed false adds (nothing had been written): a
-      mention does not count when
+      Revised twice, after dry-runs showed false adds (nothing had been written either time).
+      An entry is not added when it is the employer's name: the company before the colon in the
+      first line's "Company: Role", or that company's first word(s) ("Maven" for "Maven Clinic").
+      This holds everywhere in the post, the body included. A mention does not count when
       * a hyphen touches it ("Go-To-Market", "go-to-market", "Python-based");
-      * it is the company in the headline, the first line's "Company: Role" (a mention in the body
-        still counts);
       * the next word is capital, clinic, catalog, catalogue, ventures or partners;
       * it is capitalised and a neighbouring word is also capitalised ("Maven Health"), unless that
         neighbour is itself a technology ("Python Django") or the pair is a dictionary name
@@ -448,14 +448,21 @@ def _in_capitalised_name(text: str, start: int, end: int, vocab: Vocabulary) -> 
     )
 
 
-def _is_company_in_headline(text: str, start: int, end: int) -> bool:
-    """The mention is the company in the headline's "Company: Role" (the first line)."""
-    offset = len(text) - len(text.lstrip())
-    first_line = text[offset:].split("\n", 1)[0]
+def _employer(text: str) -> str | None:
+    """The company in the headline's "Company: Role" (the first line, before the colon), folded."""
+    first_line = text.lstrip().split("\n", 1)[0]
     colon = first_line.find(":")
-    if colon < 0 or start >= offset + colon:
-        return False
-    return fold(first_line[:colon]) == fold(text[start:end])
+    name = fold(first_line[:colon]) if colon > 0 else ""
+    return name or None
+
+
+def _is_employer(technology: Technology, employer: str) -> bool:
+    """A spelling of the technology is the employer's name or its first word(s) ("Maven Clinic")."""
+    for spelling in technology.spellings:
+        name = fold(spelling)
+        if employer == name or employer.startswith(name + " "):
+            return True
+    return False
 
 
 def _has_list_shape(sentence: str, technology: Technology, vocab: Vocabulary) -> bool:
@@ -489,8 +496,6 @@ def _skip_reason(
     start, end = match.span()
     if _hyphenated(text, start, end):
         return "inside a hyphenated phrase"
-    if _is_company_in_headline(text, start, end):
-        return "the company named in the headline"
     if _before_a_name_word(text, end):
         return "part of a proper name"
     if _in_capitalised_name(text, start, end, vocab):
@@ -557,8 +562,14 @@ def _named_technologies(
 ) -> list[tuple[Technology, list[Mention]]]:
     """The technologies the post names (by a mention that counts); notes the ones thrown out."""
     vocab = build_vocabulary(tuple(technologies))
+    employer = _employer(text)
     named: list[tuple[Technology, list[Mention]]] = []
     for technology in technologies:
+        if employer and _is_employer(technology, employer):
+            result.infos.append(
+                f"post {number}: {technology.name!r} not added: the employer's name"
+            )
+            continue
         found = _mentions(text, technology, vocab)
         if found.mentions:
             named.append((technology, found.mentions))
