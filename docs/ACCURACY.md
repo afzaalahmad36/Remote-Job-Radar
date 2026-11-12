@@ -106,6 +106,36 @@ uv run python -m scripts.try_extraction --eval .local/eval/labels.pass1.json
 
 Then write the new record's file name next to its numbers.
 
+## The remote-policy rule of `rules_v3`
+
+`rules_v3` adds one rule for the remote policy. Read these limits before the numbers:
+
+- **It is specific to this board's `Headquarters:` header.** The rule reads that header line only,
+  and only when the rest of the text gives mixed signals (a remote word next to a hybrid or on-site
+  word, which `rules_v2` leaves undecided). A feed without the header is unaffected.
+- **It was written from a diagnosis of the stored posts, all 200, not only the 30 labelled ones**, so
+  it is not independent evidence either, like the `rules_v2` changes. It changes 20 of the 200 stored
+  posts from no policy to remote, and no other result.
+- **It does not change the parse-correct share.** A missing remote policy never fails a post, so
+  the 30-post share stays at 14/30 offline (the completed labels); only the field's accuracy moves.
+- **Safeguard.** A body statement that names a concrete obligation ("three days a week", "days per
+  week", "in the office N days", "must live within", "within N miles", "relocate") keeps the result at
+  none. Three labelled posts are held back by it (a New York office with core days three days a week;
+  in-person collaboration 2-3 days per week); their labels say remote.
+- **Posts 8 and 27 may have unsupported remote labels.** The post text never says remote, anywhere
+  or worldwide, so no text rule can find it; they are left as labelled.
+
+Remote-policy field, rules offline, current completed labels, computed in memory with the rule
+switched off and on (no run record: re-run `try_extraction --eval` to record it):
+
+| | correct | missing | invented | accuracy | recall on non-blank labels | invented-value posts |
+|---|---|---|---|---|---|---|
+| `rules_v2` behaviour | 16 | 12 | 1 | 56.7% | 57.1% (16/28) | 1/30 |
+| `rules_v3` | 23 | 5 | 1 | 80.0% | 82.1% (23/28) | 1/30 |
+
+The sample has no hybrid label, so how the rule behaves on a genuinely hybrid post whose header says
+remote is untested on real data; the unit tests cover it with invented text.
+
 ## The second pass
 
 `scripts/eval_complete_labels.py` completes the labels under fixed rules (they are listed in the

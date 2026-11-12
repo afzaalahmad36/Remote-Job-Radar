@@ -21,7 +21,7 @@ from app.extraction.types import Confidence, Found
 from app.ingestion.text import MAX_TEXT_CHARS
 from app.models import RemotePolicy, Seniority
 
-RULES_VERSION = "rules_v2"  # stored in jobs.extraction_rules_version; bump when the rules change
+RULES_VERSION = "rules_v3"  # stored in jobs.extraction_rules_version; bump when the rules change
 MAX_HEADLINE_CHARS = 250
 MAX_TITLE_CHARS = 150
 MAX_URLS_SCANNED = 100
@@ -208,6 +208,25 @@ _NOT_REMOTE = re.compile(
 _NOT_ONSITE = re.compile(r"\b(?:no|not|without)\s+(?:an?\s+)?(?:on[- ]?site|in[- ]office)\b", re.I)
 _ANY_REMOTE = re.compile(r"\bremote\b", re.IGNORECASE)
 
+# One job board puts a "Headquarters: ..." header in the first lines of every post. The header is
+# only read when the rest of the text gives mixed signals (see `_headquarters_remote`).
+_HQ_LINE = re.compile(r"^\W*headquarters?\s*:\s*(.*)$", re.IGNORECASE)
+_HQ_REMOTE = re.compile(r"\bremote\b|\banywhere\b|\bworldwide\b", re.IGNORECASE)
+_HQ_NOT_REMOTE = re.compile(r"\bhybrid\b|\bon[- ]?site\b|\bin[- ]?office\b", re.IGNORECASE)
+_HQ_LOOKED_AT_LINES = 6
+_HQ_LOOKED_AT_CHARS = 1000
+# A body statement that names a concrete duty to be somewhere ("3 days a week in the office",
+# "must live within 50 miles", "relocate"): when one is there, the header does not overrule it.
+_OBLIGATION = re.compile(
+    r"\b(?:\d+|one|two|three|four|five)\s+days?\s+(?:a|per|each|every)\s+(?:week|month)\b"
+    r"|\bdays?\s+(?:a|per|each)\s+week\b"
+    r"|\bin\s+the\s+office\s+(?:\w+\s+){0,3}days?\b"
+    r"|\bmust\s+(?:live|reside)\b"
+    r"|\bwithin\s+(?:\d+\s+)?(?:miles?|km|kilomet(?:er|re)s?)\b"
+    r"|\brelocat",
+    re.IGNORECASE,
+)
+
 
 def _firm_wfh(text: str) -> bool:
     """True if some "WFH" mention is not an occasional option."""
@@ -221,8 +240,31 @@ def _firm_wfh(text: str) -> bool:
     return False
 
 
+def _headquarters_remote(text: str) -> Found[RemotePolicy] | None:
+    """Remote, when the "Headquarters:" header names it and the body only mentions hybrid/on-site.
+
+    Called only after the text itself gave mixed signals. The header line must name remote,
+    anywhere or worldwide and no hybrid, on-site or in-office word; a place alone decides nothing.
+    A body statement with a concrete obligation (`_OBLIGATION`) keeps the result at "no policy".
+    """
+    head = text[:_HQ_LOOKED_AT_CHARS]
+    lines = [line for line in head.split("\n") if line.strip()][:_HQ_LOOKED_AT_LINES]
+    for line in lines:
+        match = _HQ_LINE.match(line)
+        if match is None:
+            continue
+        value = match.group(1)
+        if _HQ_REMOTE.search(value) and not _HQ_NOT_REMOTE.search(value):
+            return None if _OBLIGATION.search(text) else Found(RemotePolicy.REMOTE, Confidence.HIGH)
+        return None
+    return None
+
+
 def _remote_policy(text: str) -> Found[RemotePolicy] | None:
     """Explicit phrases give HIGH; a bare "remote" gives LOW; mixed signals give nothing.
+
+    Mixed signals are settled only by a "Headquarters:" header that names remote (a rule for one
+    job board's header; see `_headquarters_remote`).
 
     Links are ignored: a job board's address ("weworkremotely.com/remote-jobs/...") says nothing
     about this job.
@@ -240,7 +282,8 @@ def _remote_policy(text: str) -> Found[RemotePolicy] | None:
     if not signals:
         return Found(RemotePolicy.REMOTE, Confidence.LOW) if mentions_remote else None
     if len(signals) > 1 or (mentions_remote and RemotePolicy.REMOTE not in signals):
-        return None  # "hybrid or remote", "remote or on-site": the post does not decide
+        # "hybrid or remote", "remote or on-site": the text does not decide, the header may
+        return _headquarters_remote(text)
     return Found(signals.pop(), Confidence.HIGH)
 
 
