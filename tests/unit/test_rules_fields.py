@@ -162,6 +162,74 @@ def test_a_negated_onsite_is_not_onsite() -> None:
     assert result.remote_policy.value is RemotePolicy.REMOTE
 
 
+# A job board puts "Headquarters: ..." in the first lines. The header is read only when the text
+# itself gave mixed signals (a remote word next to a hybrid or on-site word).
+
+
+def hq_post(header: str, body: str) -> str:
+    return post("Acme: Backend Engineer", f"Headquarters: {header}\nSalary: n/a\n\n{body}")
+
+
+def test_a_remote_headquarters_settles_a_generic_hybrid_mention() -> None:
+    body = "A remote team. Some colleagues enjoy hybrid arrangements."
+
+    result = extract_with_rules(hq_post("Remote - US", body))
+
+    assert result.remote_policy == Found(RemotePolicy.REMOTE, Confidence.HIGH)
+
+
+@pytest.mark.parametrize("header", ["Anywhere", "Worldwide", "Germany (Remote)"])
+def test_a_headquarters_with_anywhere_or_worldwide_or_remote_counts(header: str) -> None:
+    body = "Our remote team. An on-site day is possible for the odd workshop."
+
+    result = extract_with_rules(hq_post(header, body))
+
+    assert result.remote_policy == Found(RemotePolicy.REMOTE, Confidence.HIGH)
+
+
+@pytest.mark.parametrize(
+    "obligation",
+    [
+        "Hybrid: 3 days a week in the office.",
+        "Remote, but you must live within 50 miles of Austin. Hybrid weeks apply.",
+        "Hybrid role, in the office two days each week.",
+        "Remote, hybrid if you relocate to Denver.",
+    ],
+)
+def test_a_body_obligation_is_not_overruled_by_the_header(obligation: str) -> None:
+    assert extract_with_rules(hq_post("Remote - US", obligation)).remote_policy is None
+
+
+def test_a_place_only_headquarters_decides_nothing() -> None:
+    body = "A remote team. Some colleagues enjoy hybrid arrangements."
+
+    assert extract_with_rules(hq_post("Austin, Texas", body)).remote_policy is None
+
+
+def test_a_headquarters_naming_hybrid_decides_nothing() -> None:
+    body = "A remote team. Some colleagues enjoy hybrid arrangements."
+
+    assert extract_with_rules(hq_post("Remote or hybrid", body)).remote_policy is None
+
+
+def test_a_post_without_a_headquarters_line_is_unaffected() -> None:
+    body = "A remote team. Some colleagues enjoy hybrid arrangements."
+
+    assert extract_with_rules(post("Backend Engineer", body)).remote_policy is None
+
+
+def test_the_headquarters_is_only_read_in_the_first_lines() -> None:
+    late = "\n".join(["line"] * 10) + "\nHeadquarters: Remote - US\nRemote, some hybrid."
+
+    assert extract_with_rules(post("Backend Engineer", late)).remote_policy is None
+
+
+def test_a_remote_headquarters_does_not_change_a_clear_text_signal() -> None:
+    result = extract_with_rules(hq_post("Remote - US", "This position is not remote."))
+
+    assert result.remote_policy == Found(RemotePolicy.ONSITE, Confidence.HIGH)
+
+
 # --- stack ------------------------------------------------------------------------------------
 
 
