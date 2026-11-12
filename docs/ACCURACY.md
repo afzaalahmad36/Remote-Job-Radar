@@ -8,8 +8,9 @@ was labelled. CI never labels or scores real posts, and the scoring makes no pro
 rules (`rules_v2`, recomputed offline): **13 of 30 posts parsed correctly (43.3%)**, and the
 invented-value gate (at most 10% of posts with an invented value) also failed at 4 of 30
 (`.local/eval/runs/20261106T081400Z.json`). On the completed labels the best result is 14 of 30
-(46.7%, invented 1 of 30, `.local/eval/runs/20261111T071345Z.json`), but that score is less
-independent of the extractor (see "The second pass"), so it is reported next to the first-pass
+(46.7%, invented 1 of 30, `.local/eval/runs/20261111T071345Z.json`), and the same 14 of 30 after the
+`rules_v3` remote-policy rule (`.local/eval/runs/20261112T121649Z.json`). The completed-label score is
+less independent of the extractor (see "The second pass"), so it is reported next to the first-pass
 number and does not replace it.
 
 Why the target was not met:
@@ -21,9 +22,12 @@ Why the target was not met:
 - **The stack.** 62 label entries are not in the technology dictionary: they cost recall without
   being a rule miss. Stack recall is 57.6% against the 70% the rule asks for, while precision is
   91.9%: the extractor mostly finds correct technologies but not all that the post names.
-- **Remote policy.** The weakest field: 12 of the 28 non-blank labels were not found (recall 57.1%,
-  counted from the record). A missing value does not fail a post under the rule (only a wrong or
-  invented one does), so this is a real gap in the extractor that the 90% figure does not show.
+- **Remote policy.** The weakest field under `rules_v2`: 12 of the 28 non-blank labels were not found
+  (recall 57.1%, counted from the record). A missing value does not fail a post under the rule (only
+  a wrong or invented one does), so this was a real gap that the 90% figure does not show. The
+  `rules_v3` rule closed part of it (recall 82.1%, accuracy 80.0%, record `20261112T121649Z.json`)
+  without moving the parse-correct share; 5 labelled remote posts are still missed (see "The
+  remote-policy rule of `rules_v3`").
 - **Smaller errors**: 2 wrong titles, 2 wrong companies and 1 invented remote policy.
 
 What was changed in response to the first run:
@@ -33,6 +37,9 @@ What was changed in response to the first run:
   list or an "X alternative" phrase is not a stack, a post naming more than 12 technologies reports
   no stack, ambiguous English words (swift, rust, ruby, ...) need a capital letter, and `$` with
   `CAN`/`CAD` is CAD.
+- **`rules_v3`** (from a diagnosis of the stored posts): a `Headquarters:` header that names remote,
+  anywhere or worldwide settles a post whose text gives mixed remote signals, unless the body states
+  a concrete obligation. It is specific to one board's header format.
 - **The evaluation tooling**: blind labelling (`eval_label`), scoring of the stored extraction and
   of the rules recomputed offline (`try_extraction --eval`), label checks, and a recompute script
   that resets old rules-only rows so the sweep redoes them.
@@ -54,6 +61,8 @@ codes only, no post text or labels). A cell with no record is "to fill": it has 
 | First pass | stored extraction after the `rules_v2` recompute | to fill | to fill | to fill | to fill |
 | Completed (second pass) | rules recomputed offline, `rules_v2` | 14/30 = 46.7% (30.2% to 63.9%) | 1/30 = 3.3% | 70.8% | `.local/eval/runs/20261111T071345Z.json` |
 | Completed (second pass) | stored extraction after the `rules_v2` recompute | 11/30 = 36.7% (21.9% to 54.5%) | 3/30 = 10.0% | 69.7% | `.local/eval/runs/20261111T071345Z.json` |
+| Completed (second pass), after the remote-policy rule (`rules_v3`) | rules recomputed offline | 14/30 = 46.7% (30.2% to 63.9%) | 1/30 = 3.3% | 70.8% | `.local/eval/runs/20261112T121649Z.json` |
+| Completed (second pass), after the remote-policy rule (`rules_v3`) | stored extraction | 11/30 = 36.7% (21.9% to 54.5%) | 3/30 = 10.0% | 69.7% | `.local/eval/runs/20261112T121649Z.json` |
 
 Notes on the filled cells:
 
@@ -71,6 +80,19 @@ Notes on the filled cells:
   extraction only. The record does not say why; the expected cause is the rows the model enriched
   earlier, which the recompute deliberately does not reset.
 - The run `20261111T071345Z.json` made no provider request (`provider_requests: 0`).
+- **The `rules_v3` rows did not move the parse-correct share**, as predicted: a missing remote policy
+  never fails a post, and the remote-policy field was already at 0 wrong values. Only the field's
+  accuracy changed (see the table below). The invented-value gate is also unchanged: 1 of 30 offline,
+  and for the stored extraction 3 of 30 = 10.0%, at the limit and not above it
+  (`gate_failed: false`).
+- **The stored extraction trails the rules** in `20261112T121649Z.json` (11/30 against 14/30, the
+  same three posts as before): two have an invented seniority and one more has an extra stack entry
+  in the stored extraction only (stack false positives 12 against 8). The record does not hold rules
+  versions, so the cause rests on the owner's check of the database: 16 model-enriched rows kept
+  their `rules_v1` results, because the recompute deliberately does not reset rows the model
+  touched. The two invented seniority values came from the model path on labelled posts. The
+  remote-policy field is identical in both outputs (23 correct).
+- The run `20261112T121649Z.json` also made no provider request (`provider_requests: 0`).
 - Stack F1 is computed from the true/false positive and false negative counts in the record
   (micro-averaged over the 30 posts).
 - "First pass" means the labels as corrected from the post text alone by `scripts/eval_fix_labels.py`
@@ -94,6 +116,22 @@ correct value and a correctly absent one.
 
 Stack entries over all 30 posts: 91 correct, 8 extra and 67 missed, so precision 91.9%, recall 57.6%
 and F1 70.8%.
+
+### Per field, rules offline, before and after `rules_v3`
+
+Before: `20261111T071345Z.json`; after: `20261112T121649Z.json` (the `rules` block of each), same labels.
+
+| Field | Before (`rules_v2`) | After (`rules_v3`) |
+|---|---|---|
+| Title | 93.3% | 93.3% |
+| Company | 93.3% | 93.3% |
+| Salary | 93.3% | 93.3% |
+| Seniority | 96.7% | 96.7% |
+| Remote policy, accuracy | 56.7% (17/30) | 80.0% (24/30) |
+| Remote policy, recall on non-blank labels | 57.1% (16/28) | 82.1% (23/28) |
+| Stack (posts passing the stack rule) | 60.0% | 60.0% |
+| Posts parsing correctly | 14/30 = 46.7% | 14/30 = 46.7% |
+| Invented-value posts | 1/30 | 1/30 |
 
 ## How to fill the remaining row
 
@@ -125,15 +163,19 @@ Then write the new record's file name next to its numbers.
 - **Posts 8 and 27 may have unsupported remote labels.** The post text never says remote, anywhere
   or worldwide, so no text rule can find it; they are left as labelled.
 
-Remote-policy field, rules offline, current completed labels, computed in memory with the rule
-switched off and on (no run record: re-run `try_extraction --eval` to record it):
+Remote-policy field, rules offline, completed labels. Before the rule was merged these numbers were
+computed in memory with the rule switched off and on; the run `20261112T121649Z.json` then measured
+the same result (23 correct, 5 missing, 1 invented), so the in-memory prediction matched the
+measurement:
 
 | | correct | missing | invented | accuracy | recall on non-blank labels | invented-value posts |
 |---|---|---|---|---|---|---|
 | `rules_v2` behaviour | 16 | 12 | 1 | 56.7% | 57.1% (16/28) | 1/30 |
 | `rules_v3` | 23 | 5 | 1 | 80.0% | 82.1% (23/28) | 1/30 |
 
-The sample has no hybrid label, so how the rule behaves on a genuinely hybrid post whose header says
+Five labelled remote posts are still missed: three are held back by the obligation safeguard (posts
+11, 26 and 29) and two name no remote word in the post at all (posts 8 and 27), where the label may
+be unsupported. The sample has no hybrid label, so how the rule behaves on a genuinely hybrid post whose header says
 remote is untested on real data; the unit tests cover it with invented text.
 
 ## The second pass
@@ -164,4 +206,5 @@ now has. A score on the completed labels is therefore not independent evidence.
 - **Stored and offline results differ** on posts the model enriched; the offline rules column is the
   one that measures the rules.
 - The extractor and the lists were not changed to improve a score after a score was seen, except by
-  the documented `rules_v2` change set, which came from the diagnosis of the first run.
+  the documented `rules_v2` change set, which came from the diagnosis of the first run, and the
+  `rules_v3` remote-policy rule, which came from a diagnosis of the stored posts.
