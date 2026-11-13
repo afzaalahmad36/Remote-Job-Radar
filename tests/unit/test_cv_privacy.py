@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import Cv, CvFormat
+from app.models import Cv, CvFormat, JobPreferences
 
 APP = Path(__file__).resolve().parent.parent.parent / "app"
 
@@ -77,8 +77,11 @@ def forbidden_imports(root: Path, start: Path, *, follow: bool) -> list[str]:
 def cv_files() -> list[Path]:
     return sorted((APP / "cv").glob("*.py")) + [
         APP / "services" / "cv_service.py",
+        APP / "services" / "preferences_service.py",
         APP / "models" / "cv.py",
+        APP / "models" / "preferences.py",
         APP / "schemas" / "cv.py",
+        APP / "schemas" / "preferences.py",
     ]
 
 
@@ -87,10 +90,11 @@ def test_cv_code_does_not_reach_an_llm_or_the_network_even_indirectly(path: Path
     assert forbidden_imports(APP, path, follow=True) == []
 
 
-def test_the_cv_router_imports_no_llm_or_network_module_directly() -> None:
-    # The router imports api_deps, which legitimately reaches the task queue, so only its own
-    # imports are checked; everything it calls for CV work is covered by the test above.
-    assert forbidden_imports(APP, APP / "routers" / "cv.py", follow=False) == []
+@pytest.mark.parametrize("router", ["cv.py", "preferences.py"])
+def test_the_personal_data_routers_import_no_llm_or_network_module_directly(router: str) -> None:
+    # A router imports api_deps, which legitimately reaches the task queue, so only its own
+    # imports are checked; everything it calls for this work is covered by the test above.
+    assert forbidden_imports(APP, APP / "routers" / router, follow=False) == []
 
 
 def test_the_scan_finds_a_direct_and_an_indirect_violation(tmp_path: Path) -> None:
@@ -125,3 +129,12 @@ def test_a_cv_object_never_shows_its_text_when_printed() -> None:
     for rendered in (repr(cv), str(cv), f"{cv}", f"{[cv]}"):
         assert "CANARY-REPR-91" not in rendered
         assert "Alex" not in rendered
+
+
+def test_a_preferences_object_never_shows_the_notes_when_printed() -> None:
+    preferences = JobPreferences(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), notes="CANARY-NOTES-17 only fintech"
+    )
+
+    for rendered in (repr(preferences), str(preferences), f"{[preferences]}"):
+        assert "CANARY-NOTES-17" not in rendered
