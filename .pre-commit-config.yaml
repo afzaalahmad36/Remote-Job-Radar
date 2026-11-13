@@ -26,3 +26,11 @@ repos:
         entry: docker-compose.override.yml is local only (see CLAUDE.md section 10)
         language: fail
         files: (^|/)docker-compose\.override\.ya?ml$
+      # A real CV must never be committed. Rejects any PDF and any file named like a CV outside
+      # tests/fixtures/cv (source files such as app/models/cv.py are fine). The same check also
+      # runs in the test suite over every tracked file, so CI catches a skipped hook.
+      - id: no-cv-files
+        name: no CV-like files outside tests/fixtures/cv
+        entry: uv run python -m scripts.check_no_cv_files
+        language: system
+        pass_filenames: true
