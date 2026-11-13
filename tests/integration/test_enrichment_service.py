@@ -641,24 +641,67 @@ async def test_no_database_connection_is_in_use_while_the_provider_is_called(
 # --- two workers ---------------------------------------------------------------------------------
 
 
-async def test_two_workers_asking_at_once_store_one_answer_and_both_requests_are_counted(
+class MeetingPointClient(FakeLLMClient):
+    """A fake provider that holds each caller until `barrier.parties` callers have arrived.
+
+    Neither worker can get its answer before both are inside `complete()`. By then both have
+    already loaded their snapshot and reserved a request, and nothing is written yet, so the
+    second to write is certain to lose the compare-and-set. (Without this, a worker that is
+    scheduled late can start after the first has committed, and the outcome depends on timing.)
+    """
+
+    def __init__(self, script: list[str], barrier: asyncio.Barrier, *, model: str) -> None:
+        super().__init__(script, model=model)
+        self._barrier = barrier
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        async with asyncio.timeout(10):  # a broken rendezvous fails the test instead of hanging
+            await self._barrier.wait()
+        return await super().complete(request)
+
+
+async def test_two_workers_in_flight_together_store_one_answer_and_both_requests_are_counted(
     factory: SessionFactory,
 ) -> None:
     job_id = await waiting_job(factory)
-    first = FakeLLMClient([answer(stack=["Quux"])], model="first")
-    second = FakeLLMClient([answer(stack=["Zigzag Engine"])], model="second")
+    barrier = asyncio.Barrier(2)
+    first = MeetingPointClient([answer(stack=["Quux"])], barrier, model="first")
+    second = MeetingPointClient([answer(stack=["Zigzag Engine"])], barrier, model="second")
     cooldown = FakeCooldown()
 
     results = await asyncio.gather(
         run(factory, job_id, first, cooldown), run(factory, job_id, second, cooldown)
     )
 
-    outcomes = sorted(result.outcome for result in results)
-    assert outcomes == [ExtractionOutcome.ENRICHED, ExtractionOutcome.LOST_RACE]
+    assert sorted(result.outcome for result in results) == [
+        ExtractionOutcome.ENRICHED,
+        ExtractionOutcome.LOST_RACE,
+    ]
+    assert len(first.requests) == 1 and len(second.requests) == 1  # both really asked
     job = await row(factory, job_id)
     assert job.extraction_model in {"first", "second"}  # one consistent writer, not a mixture
     assert job.stack == (["Quux"] if job.extraction_model == "first" else ["Zigzag Engine"])
     assert [entry.outcome for entry in await usage_rows(factory)] == ["ok", "ok"]
+
+
+async def test_a_second_worker_that_starts_after_the_first_commits_makes_no_request(
+    factory: SessionFactory,
+) -> None:
+    """The other legitimate interleaving: no overlap at all, so nothing is lost or repeated."""
+    job_id = await waiting_job(factory)
+    first = FakeLLMClient([answer(stack=["Quux"])], model="first")
+    second = FakeLLMClient([answer(stack=["Zigzag Engine"])], model="second")
+    cooldown = FakeCooldown()
+
+    first_result = await run(factory, job_id, first, cooldown)
+    second_result = await run(factory, job_id, second, cooldown)
+
+    assert first_result.outcome is ExtractionOutcome.ENRICHED
+    assert second_result.outcome is ExtractionOutcome.ALREADY_DONE
+    assert second.requests == []  # it saw a finished job and asked nothing
+    job = await row(factory, job_id)
+    assert job.extraction_model == "first" and job.stack == ["Quux"]
+    assert [entry.outcome for entry in await usage_rows(factory)] == ["ok"]  # one request only
 
 
 # --- what may leave the machine ------------------------------------------------------------------
