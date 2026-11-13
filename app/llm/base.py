@@ -14,11 +14,16 @@ class Purpose(StrEnum):
 
     JOB_POST_EXTRACTION = "job_post_extraction"  # public job post text, contact details removed
     CONNECTIVITY_CHECK = "connectivity_check"  # a fixed harmless sentence, never stored data
+    # Personal data: a CV (or anything derived from it). No code sends this today (Phase 4 uses no
+    # LLM at all); it exists so a future local-only use has a name, and so a test can prove that
+    # the guard refuses it for every hosted provider.
+    CV_ANALYSIS = "cv_analysis"
 
 
 # Hosted providers (a free tier may use what it is sent to improve products, and people may read
 # it) accept only these. Anything touching a CV or other personal data is never listed here: it
-# may only go to a provider running on your own machine.
+# may only go to a provider running on your own machine. A test pins this set exactly, so adding
+# a purpose here is a visible, reviewed change.
 HOSTED_ALLOWED_PURPOSES = frozenset({Purpose.JOB_POST_EXTRACTION, Purpose.CONNECTIVITY_CHECK})
 
 

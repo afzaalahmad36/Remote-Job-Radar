@@ -36,3 +36,9 @@ Thumbs.db
 # Local Compose override (publishes the db port on this machine only)
 docker-compose.override.yml
 docker-compose.override.yaml
+
+# A real CV must never be committed (scripts/check_no_cv_files.py enforces it). Only invented ones
+# live in tests/fixtures/cv. Backups (pg_dump) and run records can hold CV text too: keep them
+# outside the repository.
+*.pdf
+!tests/fixtures/cv/*.pdf

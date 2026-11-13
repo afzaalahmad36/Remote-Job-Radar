@@ -96,6 +96,12 @@ async def rate_limit_extract(request: Request, user: CurrentUserDep) -> None:
     limiter.check(f"extract:{user.id}")
 
 
+async def rate_limit_cv(request: Request, user: CurrentUserDep) -> None:
+    """Limit CV uploads per user: each PDF is read in a separate process."""
+    limiter: RateLimiter = request.app.state.cv_rate_limiter
+    limiter.check(f"cv:{user.id}")
+
+
 async def rate_limit_auth(request: Request) -> None:
     """Limit each client IP per auth endpoint.
 

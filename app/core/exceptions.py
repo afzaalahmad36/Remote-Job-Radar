@@ -68,6 +68,35 @@ class RetriesExhaustedError(ConflictError):
     code = "retries_exhausted"
 
 
+class CvTooLargeError(DomainError):
+    """The uploaded CV is bigger than the byte limit."""
+
+    status_code = 413
+    code = "cv_too_large"
+
+
+class CvUnsupportedTypeError(DomainError):
+    """The upload is not a PDF or UTF-8 plain text."""
+
+    status_code = 415
+    code = "cv_unsupported_type"
+
+
+class CvUnreadableError(DomainError):
+    """The CV is the right type but cannot be used. The detail is always a fixed phrase chosen
+    by the service, never text taken from the file or from a parser's error message."""
+
+    status_code = 422
+    code = "cv_unreadable"
+
+
+class CvBusyError(DomainError):
+    """Too many CVs are being read at this moment; trying again shortly will work."""
+
+    status_code = 503
+    code = "cv_busy"
+
+
 class QueueUnavailableError(DomainError):
     """The background-job system (Redis) cannot be reached right now."""
 

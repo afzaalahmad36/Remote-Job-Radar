@@ -1,5 +1,6 @@
 """Import every model here so `Base.metadata` knows all tables (Alembic relies on this)."""
 
+from app.models.cv import Cv, CvFormat
 from app.models.job import (
     ExtractionMethod,
     ExtractionStatus,
@@ -15,6 +16,8 @@ from app.models.source import Source, SourceType
 from app.models.user import User
 
 __all__ = [
+    "Cv",
+    "CvFormat",
     "ExtractionMethod",
     "ExtractionStatus",
     "Job",

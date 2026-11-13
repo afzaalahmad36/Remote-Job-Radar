@@ -84,6 +84,22 @@ class Settings(BaseSettings):
     # After this many days a job that still waits for the LLM keeps its rules data and is skipped.
     llm_enrichment_give_up_days: int = Field(default=7, ge=1)
 
+    # --- CV upload (Phase 4). A CV is personal data: it never reaches a hosted provider -----------
+    # Hard caps on what one upload may be. They bound memory and CPU for untrusted files.
+    cv_max_file_bytes: int = Field(default=2 * 1024 * 1024, ge=1_024, le=10 * 1024 * 1024)
+    # Checked from the PDF's page tree BEFORE any text is extracted.
+    cv_max_pages: int = Field(default=10, ge=1, le=50)
+    # Characters of text kept (after cleaning). A longer CV is refused, never silently cut.
+    cv_max_chars: int = Field(default=30_000, ge=1_000, le=200_000)
+    # Hard time limit for reading one PDF in its own process; on expiry the process is killed.
+    cv_pdf_timeout_seconds: float = Field(default=10.0, gt=0, le=60.0)
+    # Address-space limit (MB) of the PDF-reading process, applied with setrlimit(RLIMIT_AS) on
+    # Linux. Not enforced on Windows, and macOS ignores it, so only Linux (Docker) is protected.
+    cv_pdf_memory_limit_mb: int = Field(default=512, ge=128, le=4096)
+    # Max CV uploads per user within the window (each one may start a PDF-reading process).
+    cv_rate_limit_attempts: int = Field(default=5, gt=0)
+    cv_rate_limit_window_seconds: int = Field(default=60, gt=0)
+
     @model_validator(mode="after")
     def _check_llm_settings(self) -> Self:
         if self.llm_provider == "fake" and self.env == "production":
