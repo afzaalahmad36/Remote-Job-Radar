@@ -1,0 +1,22 @@
+Alex Example
+Backend Engineer
+alex.example@example.com | +1 555 010 0199 | https://github.com/alex-example | linkedin.com/in/alex-example
+
+SUMMARY
+Backend engineer with 6 years of experience building APIs and data pipelines. Open to remote roles.
+
+EXPERIENCE
+Senior Backend Engineer, Northwind Demo Labs (2022 - present)
+- Built REST APIs with Python, FastAPI and PostgreSQL serving 2M requests a day.
+- Moved background jobs to Celery and Redis, and containerised services with Docker.
+- Wrote the CI pipeline in GitHub Actions; mentored two junior engineers.
+
+Software Engineer, Contoso Sample Works (2019 - 2022)
+- Built a React and TypeScript dashboard, and a Node.js service for notifications.
+- Designed SQL schemas, wrote migrations, and tuned slow queries.
+
+EDUCATION
+BSc Computer Science, Example University (2015 - 2019)
+
+SKILLS
+Python, FastAPI, Django, PostgreSQL, Redis, Celery, Docker, Kubernetes, AWS, React, TypeScript, Git

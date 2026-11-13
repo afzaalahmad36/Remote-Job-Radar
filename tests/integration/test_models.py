@@ -7,6 +7,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    CvFormat,
     ExtractionMethod,
     ExtractionStatus,
     Job,
@@ -124,6 +125,7 @@ async def test_postgres_enum_labels_match_python_enums(db_session: AsyncSession)
         "llm_enrichment": [m.value for m in LlmEnrichment],
         "salary_period": [m.value for m in SalaryPeriod],
         "seniority": [m.value for m in Seniority],
+        "cv_format": [m.value for m in CvFormat],
     }
 
 

@@ -42,7 +42,7 @@ def test_upgrade_head_creates_the_schema(config: Config, test_database_url: str)
     command.upgrade(config, "head")
 
     tables = query(test_database_url, "SELECT tablename FROM pg_tables WHERE schemaname='public'")
-    assert {"users", "sources", "jobs"} <= set(tables)
+    assert {"users", "sources", "jobs", "cvs"} <= set(tables)
 
 
 def test_migrations_match_the_models(config: Config) -> None:
