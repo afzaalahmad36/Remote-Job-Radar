@@ -10,8 +10,9 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,8 @@ from app.core.exceptions import (
     NotFoundError,
 )
 from app.cv.pdf_text import PdfReadFailure, read_pdf_text
+from app.cv.skills import find_skills
+from app.cv.suggestions import Suggestions, suggest
 from app.cv.text import clean_cv_text, mask_cv_text
 from app.models import Cv, CvFormat
 
@@ -116,6 +119,45 @@ async def delete_cv(session: AsyncSession, user_id: uuid.UUID) -> None:
     logger.info("CV deleted: user=%s", user_id)
 
 
+@dataclass(frozen=True)
+class SkillsView:
+    """The stored skills with the suggestions read from the CV text (not stored: cheap to redo)."""
+
+    skills: list[str]
+    edited: bool
+    suggestions: Suggestions
+    updated_at: datetime
+
+
+def _skills_view(cv: Cv) -> SkillsView:
+    return SkillsView(list(cv.skills), cv.skills_edited, suggest(cv.text), cv.updated_at)
+
+
+async def get_skills(session: AsyncSession, user_id: uuid.UUID) -> SkillsView:
+    """The user's skills and suggestions, or NotFoundError when there is no CV."""
+    return _skills_view(await get_cv(session, user_id))
+
+
+async def save_skills(session: AsyncSession, user_id: uuid.UUID, skills: list[str]) -> SkillsView:
+    """Replace the user's skills with their own list (already normalised by the schema).
+
+    One UPDATE, no read first, so it cannot race with an upload. NotFoundError if there is no CV.
+    """
+    statement = (
+        update(Cv)
+        .where(Cv.user_id == user_id)
+        .values(skills=skills, skills_edited=True, updated_at=func.now())
+        .returning(Cv)
+        .execution_options(populate_existing=True)
+    )
+    cv = await session.scalar(statement)
+    if cv is None:
+        raise NotFoundError("No CV uploaded")
+    await session.commit()
+    logger.info("CV skills saved: user=%s count=%d", user_id, len(skills))  # never the names
+    return _skills_view(cv)
+
+
 def _decode_text(data: bytes) -> str:
     try:
         text = data.decode("utf-8-sig")  # tolerates the BOM some editors add
@@ -163,6 +205,10 @@ async def _upsert(
         "page_count": pages,
         "char_count": len(text),
         "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        # A new CV is a new document: its skills are read from it again, and any list the user
+        # edited for the previous one is replaced (the edited flag goes back to False).
+        "skills": find_skills(text),
+        "skills_edited": False,
     }
     statement = (
         insert(Cv)
