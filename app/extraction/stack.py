@@ -135,7 +135,7 @@ def spellings(name: str) -> tuple[str, ...]:
 
 # Spellings that are also ordinary English words. They count only when written with a capital
 # letter ("Swift", "Rust"), so "swift cross-functional execution" is not a language.
-_AMBIGUOUS_SPELLINGS = frozenset("swift rust unreal ruby dart flask rails celery jest".split())
+AMBIGUOUS_SPELLINGS = frozenset("swift rust unreal ruby dart flask rails celery jest".split())
 
 # A technology named only as somebody's customer or as the thing the product replaces is not
 # part of this role's stack: "trusted by OpenAI, PayPal", "a Shopify alternative".
@@ -159,16 +159,23 @@ def _is_reference(text: str, start: int, end: int) -> bool:
     return _REFERENCE_AFTER.match(text, end, end + 20) is not None
 
 
-def find_stack(text: str) -> list[str]:
-    """Technologies named in the text, in order of first appearance, without duplicates.
+def find_technologies(
+    text: str, *, max_listed: int | None, skip_references: bool, max_tokens: int = MAX_TOKENS
+) -> list[str]:
+    """The scanner behind `find_stack` and the CV skills extractor.
 
-    A mention inside a customer list or an "X alternative" phrase does not count. More than
-    MAX_LISTED distinct technologies means the post is a category list ("we place developers in
-    Python, Java, Ruby, ..."), not the stack of one role: an empty list is returned.
+    Technologies named in the text, in order of first appearance, without duplicates. The two
+    callers differ only in these options: a job post drops customer-list mentions and gives up on
+    a recruiter's list, a CV (written by the person themselves) does neither.
+
+    Args:
+        max_listed: more distinct technologies than this returns [] (None: no limit).
+        skip_references: ignore a mention inside a customer list or an "X alternative" phrase.
+        max_tokens: how many words of the text are examined.
     """
     tokens = [
         (match.group().lower().rstrip(".-_"), match.start())
-        for match in islice(_TOKEN.finditer(text, 0, MAX_TOKENS * 12), MAX_TOKENS)
+        for match in islice(_TOKEN.finditer(text, 0, max_tokens * 12), max_tokens)
     ]
     found: dict[str, None] = {}
     for index in range(len(tokens)):
@@ -179,11 +186,21 @@ def find_stack(text: str) -> list[str]:
                 start = chunk[0][1]
                 end = chunk[-1][1] + len(chunk[-1][0])
                 capitalised = text[start].isupper()
-                if (capitalised or phrase not in _AMBIGUOUS_SPELLINGS) and not _is_reference(
-                    text, start, end
+                if (capitalised or phrase not in AMBIGUOUS_SPELLINGS) and not (
+                    skip_references and _is_reference(text, start, end)
                 ):
                     found.setdefault(_ALIASES[phrase], None)
                 break
-        if len(found) > MAX_LISTED:
+        if max_listed is not None and len(found) > max_listed:
             return []
     return list(found)
+
+
+def find_stack(text: str) -> list[str]:
+    """Technologies named in a job post, in order of first appearance, without duplicates.
+
+    A mention inside a customer list or an "X alternative" phrase does not count. More than
+    MAX_LISTED distinct technologies means the post is a category list ("we place developers in
+    Python, Java, Ruby, ..."), not the stack of one role: an empty list is returned.
+    """
+    return find_technologies(text, max_listed=MAX_LISTED, skip_references=True)

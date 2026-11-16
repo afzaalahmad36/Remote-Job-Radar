@@ -46,6 +46,14 @@ class TimestampMixin:
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
-def pg_enum(enum_cls: type[enum.Enum], name: str) -> Enum:
-    """A native Postgres enum that stores the enum *values* ('rss'), not the names ('RSS')."""
-    return Enum(enum_cls, name=name, values_callable=lambda e: [member.value for member in e])
+def pg_enum(enum_cls: type[enum.Enum], name: str, *, create_type: bool = True) -> Enum:
+    """A native Postgres enum that stores the enum *values* ('rss'), not the names ('RSS').
+
+    `create_type=False` reuses a type another table already created (the `jobs` enums).
+    """
+    return Enum(
+        enum_cls,
+        name=name,
+        values_callable=lambda e: [member.value for member in e],
+        create_type=create_type,
+    )

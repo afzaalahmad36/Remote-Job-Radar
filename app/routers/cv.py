@@ -2,9 +2,16 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.api_deps import CurrentUserDep, SessionDep, SettingsDep, rate_limit_cv
 from app.core.exceptions import CvTooLargeError
-from app.schemas.cv import CvRead
+from app.schemas.cv import (
+    CvRead,
+    CvSkillsRead,
+    CvSkillsWrite,
+    CvSuggestionsOut,
+    SenioritySuggestionOut,
+    YearsSuggestionOut,
+)
 from app.services import cv_service
-from app.services.cv_service import CvLimits
+from app.services.cv_service import CvLimits, SkillsView
 
 # Every endpoint takes CurrentUserDep, so all of them answer 401 without a valid access token.
 router = APIRouter(prefix="/cv", tags=["cv"])
@@ -43,7 +50,8 @@ async def put_cv(
 ) -> CvRead:
     """Upload (or replace) your CV: send the PDF or plain text itself as the request body, with
     `Content-Type: application/pdf` or `text/plain`. Only the text is kept, with emails, phone
-    numbers and links masked; the file is discarded."""
+    numbers and links masked; the file is discarded. Uploading again replaces the CV and also
+    **discards any skills you edited** (they are read from the new text)."""
     data = await read_limited_body(request, settings.cv_max_file_bytes)
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     limits = CvLimits(
@@ -66,3 +74,37 @@ async def delete_cv(user: CurrentUserDep, session: SessionDep) -> Response:
     """Delete your CV (its text included) permanently."""
     await cv_service.delete_cv(session, user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _skills_read(view: SkillsView) -> CvSkillsRead:
+    years, level = view.suggestions.years_of_experience, view.suggestions.seniority
+    return CvSkillsRead(
+        skills=view.skills,
+        edited=view.edited,
+        suggestions=CvSuggestionsOut(
+            years_of_experience=(
+                YearsSuggestionOut(value=years.value, match=years.match) if years else None
+            ),
+            seniority=(
+                SenioritySuggestionOut(value=level.value, match=level.match) if level else None
+            ),
+        ),
+        updated_at=view.updated_at,
+    )
+
+
+@router.get("/skills")
+async def get_skills(user: CurrentUserDep, session: SessionDep) -> CvSkillsRead:
+    """Your skills (found in the CV, or the list you saved) and suggestions for years of
+    experience and seniority. The suggestions are only shown to you; nothing scores with them.
+    A CV stored before skills existed has an empty list until you save one or upload again."""
+    return _skills_read(await cv_service.get_skills(session, user.id))
+
+
+@router.put("/skills")
+async def put_skills(
+    body: CvSkillsWrite, user: CurrentUserDep, session: SessionDep
+) -> CvSkillsRead:
+    """Replace your skills with this list. Names the dictionary knows are spelled its way.
+    Uploading a new CV later discards this list and reads the skills from the new text."""
+    return _skills_read(await cv_service.save_skills(session, user.id, body.skills))

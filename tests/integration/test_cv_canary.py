@@ -132,3 +132,74 @@ async def test_deleting_the_cv_leaves_no_trace_of_it_in_the_database(
 
     dump = (await db_session.execute(text("SELECT cvs::text FROM cvs"))).scalars().all()
     assert dump == []
+
+
+async def test_skills_and_preferences_text_never_reaches_an_llm_a_log_line_or_an_error(
+    db_client: AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+    llm_calls: list[object],
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    headers = await auth_headers(db_client, "canary@example.com")
+    skills, prefs = f"{CV}/skills", "/api/v1/preferences"
+    notes = f"{MARKER} only remote. Reach me: {EMAIL}, {PHONE}, {LINK}"
+
+    # the happy paths: upload, read and edit skills, save and read preferences
+    uploaded = await db_client.put(
+        CV, content=CV_TEXT, headers=headers | {"content-type": "text/plain"}
+    )
+    assert uploaded.status_code == 200
+    assert (await db_client.get(skills, headers=headers)).status_code == 200
+    edited = await db_client.put(
+        skills, json={"skills": [f"{MARKER}-skill", "Python"]}, headers=headers
+    )
+    assert edited.status_code == 200
+    saved = await db_client.put(prefs, json={"notes": notes}, headers=headers)
+    assert saved.status_code == 200
+    assert (await db_client.get(prefs, headers=headers)).status_code == 200
+    assert leaks(saved.text.replace(MARKER, "")) == []  # even the owner's copy has no contact data
+
+    # every kind of refusal, each carrying the marker in the rejected value
+    bad_skills: list[object] = [
+        [f"{MARKER}-" + "x" * 60],  # too long
+        [f"{MARKER}-{n}" for n in range(101)],  # too many
+        [MARKER, 7],  # not all strings
+    ]
+    bad_preferences: list[dict[str, object]] = [
+        {"notes": (MARKER + " ") * 200},  # too long
+        {"seniority_levels": [MARKER]},  # not a level
+        {"remote_policies": [EMAIL]},  # not a policy
+        {"min_salary": MARKER, "salary_currency": "USD", "salary_period": "year"},
+        {"min_salary": 5, "salary_currency": MARKER, "salary_period": "year"},
+        {"min_salary": 5, "salary_currency": "USD", "salary_period": PHONE},
+    ]
+    errors = [await db_client.put(skills, json={"skills": s}, headers=headers) for s in bad_skills]
+    errors += [await db_client.put(prefs, json=body, headers=headers) for body in bad_preferences]
+
+    assert [r.status_code for r in errors] == [422] * (len(bad_skills) + len(bad_preferences))
+    for response in errors:
+        assert leaks(response.text) == [], response.json()
+    assert llm_calls == []
+    assert [log_text(r) for r in caplog.records if leaks(log_text(r))] == []
+    logged = [r.getMessage() for r in caplog.records]
+    assert any("CV skills saved" in line for line in logged)
+    assert any("Preferences saved" in line for line in logged)  # we did log, just not the text
+
+
+async def test_the_database_holds_masked_notes_and_deleting_the_user_removes_them(
+    db_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers = await auth_headers(db_client, "canary@example.com")
+    notes = f"{MARKER} contact {EMAIL} {PHONE} {LINK}"
+
+    await db_client.put("/api/v1/preferences", json={"notes": notes}, headers=headers)
+
+    row = (
+        await db_session.execute(text("SELECT job_preferences::text FROM job_preferences"))
+    ).scalar_one()
+    assert MARKER in row  # the user's own words
+    assert EMAIL not in row and PHONE not in row and LINK not in row
+    await db_session.execute(text("DELETE FROM users"))
+    assert (
+        await db_session.execute(text("SELECT job_preferences::text FROM job_preferences"))
+    ).all() == []

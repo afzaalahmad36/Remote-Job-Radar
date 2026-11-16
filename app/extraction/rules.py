@@ -16,6 +16,7 @@ from pydantic import EmailStr, TypeAdapter, ValidationError
 from app.core.url_safety import UnsafeUrlError, check_url_syntax
 from app.extraction.contacts import deobfuscate, find_emails
 from app.extraction.salary import Salary, find_salary
+from app.extraction.seniority import levels_in
 from app.extraction.stack import find_stack
 from app.extraction.types import Confidence, Found
 from app.ingestion.text import MAX_TEXT_CHARS
@@ -160,21 +161,12 @@ def _company_from_body(text: str) -> Found[str] | None:
 
 # --- seniority ------------------------------------------------------------------------------
 
-_SENIORITY_WORDS: dict[Seniority, re.Pattern[str]] = {
-    Seniority.INTERN: re.compile(r"\b(?:intern(?:ship)?|trainee|apprentice)\b"),
-    Seniority.JUNIOR: re.compile(r"\b(?:junior|jr|entry[- ]level|graduate)\b"),
-    Seniority.MID: re.compile(r"\b(?:mid[- ]?level|mid|intermediate|midweight)\b"),
-    Seniority.SENIOR: re.compile(r"\b(?:senior|sr)\b"),
-    Seniority.LEAD: re.compile(r"\blead\b(?!\s+gen)|\bhead of\b"),
-    Seniority.PRINCIPAL: re.compile(r"\b(?:principal|staff|distinguished)\b"),
-}
-
 
 def _seniority(title: str | None) -> Found[Seniority] | None:
     """From the title only, and only when it names exactly one level ("Senior/Lead" is unclear)."""
     if not title:
         return None
-    levels = {level for level, pattern in _SENIORITY_WORDS.items() if pattern.search(title.lower())}
+    levels = levels_in(title)
     return Found(levels.pop(), Confidence.HIGH) if len(levels) == 1 else None
 
 

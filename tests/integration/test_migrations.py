@@ -42,7 +42,7 @@ def test_upgrade_head_creates_the_schema(config: Config, test_database_url: str)
     command.upgrade(config, "head")
 
     tables = query(test_database_url, "SELECT tablename FROM pg_tables WHERE schemaname='public'")
-    assert {"users", "sources", "jobs", "cvs"} <= set(tables)
+    assert {"users", "sources", "jobs", "cvs", "job_preferences"} <= set(tables)
 
 
 def test_migrations_match_the_models(config: Config) -> None:
@@ -186,3 +186,47 @@ def test_a_one_step_downgrade_undoes_the_schema_but_keeps_the_not_a_job_label(
         command.upgrade(config, "head")  # ADD VALUE IF NOT EXISTS: the leftover label is fine
     finally:
         clear_data(test_database_url)
+
+
+# --- the skills and preferences migration -------------------------------------------------------
+
+BEFORE_SKILLS = "f29a32b4831a"  # the revision just before cv skills and job preferences
+INSERT_CV = (
+    "WITH u AS (INSERT INTO users (id, email, hashed_password) "
+    "  VALUES (gen_random_uuid(), 'cv@example.com', 'x') RETURNING id) "
+    "INSERT INTO cvs (id, user_id, text, source_format, char_count, content_hash) "
+    "SELECT gen_random_uuid(), id, 'Python developer', 'text', 16, repeat('0', 64) FROM u"
+)
+
+
+def test_a_cv_stored_before_the_migration_gets_no_skills_and_is_not_marked_edited(
+    config: Config, test_database_url: str
+) -> None:
+    command.downgrade(config, BEFORE_SKILLS)
+    try:
+        execute(test_database_url, INSERT_CV)
+
+        command.upgrade(config, "head")
+
+        row = query(
+            test_database_url, "SELECT concat_ws('|', skills, skills_edited, text) FROM cvs"
+        )
+        assert row == ["{}|f|Python developer"]
+    finally:
+        clear_data(test_database_url)
+
+
+def test_downgrading_the_skills_migration_drops_its_columns_and_table_but_not_the_job_enums(
+    config: Config, test_database_url: str
+) -> None:
+    command.downgrade(config, BEFORE_SKILLS)
+
+    tables = query(test_database_url, "SELECT tablename FROM pg_tables WHERE schemaname='public'")
+    columns = query(
+        test_database_url,
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'cvs'",
+    )
+    enums = query(test_database_url, "SELECT typname FROM pg_type WHERE typtype = 'e'")
+    assert "job_preferences" not in tables and "cvs" in tables
+    assert not {"skills", "skills_edited"} & set(columns)
+    assert {"seniority", "remote_policy", "salary_period"} <= set(enums)  # still used by jobs

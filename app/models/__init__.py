@@ -11,6 +11,7 @@ from app.models.job import (
     Seniority,
 )
 from app.models.llm_usage import LlmUsageEntry
+from app.models.preferences import JobPreferences
 from app.models.refresh_token import RefreshToken
 from app.models.source import Source, SourceType
 from app.models.user import User
@@ -21,6 +22,7 @@ __all__ = [
     "ExtractionMethod",
     "ExtractionStatus",
     "Job",
+    "JobPreferences",
     "LlmEnrichment",
     "LlmUsageEntry",
     "RefreshToken",
