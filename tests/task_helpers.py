@@ -5,6 +5,7 @@ and event loop), so these tests commit real rows into `jobradar_test` and delete
 """
 
 import asyncio
+import hashlib
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import datetime
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.models import Job, LlmUsageEntry, RefreshToken, Source, SourceType, User
+from app.models import Cv, CvFormat, Job, LlmUsageEntry, RefreshToken, Source, SourceType, User
 from tests.fakes import UNREACHABLE_REDIS_URL
 
 
@@ -107,6 +108,30 @@ class Seeder:
 
         row: Job | None = self._run(work)
         assert row is not None
+        return row
+
+    def cv(self, user_id: uuid.UUID, body: str) -> None:
+        """A stored (already masked) text CV for `user_id`."""
+
+        async def work(session: AsyncSession) -> None:
+            session.add(
+                Cv(
+                    user_id=user_id,
+                    text=body,
+                    source_format=CvFormat.TEXT,
+                    char_count=len(body),
+                    content_hash=hashlib.sha256(body.encode()).hexdigest(),
+                )
+            )
+            await session.commit()
+
+        self._run(work)
+
+    def cv_row(self, user_id: uuid.UUID) -> Cv:
+        async def work(session: AsyncSession) -> Cv:
+            return (await session.scalars(select(Cv).where(Cv.user_id == user_id))).one()
+
+        row: Cv = self._run(work)
         return row
 
     def usage(self, user_id: uuid.UUID) -> list[LlmUsageEntry]:

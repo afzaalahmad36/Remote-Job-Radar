@@ -13,6 +13,7 @@ from app.db.session import get_session
 from app.models import User
 from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, PageParams
 from app.services import auth_service
+from app.services.embedding_service import CvEmbeddingQueue
 from app.services.extraction_retry import ExtractionQueue
 from app.services.sync_service import TaskQueue
 from app.tasks.locking import redis_job_locks_for, redis_locks_for
@@ -82,6 +83,14 @@ def get_extraction_queue(settings: SettingsDep) -> ExtractionQueue:
 
 
 ExtractionQueueDep = Annotated[ExtractionQueue, Depends(get_extraction_queue)]
+
+
+def get_cv_embedding_queue(settings: SettingsDep) -> CvEmbeddingQueue:
+    """The same queue, seen from the CV upload; tests override this too."""
+    return CeleryTaskQueue(redis_locks_for(settings.redis_url))
+
+
+CvEmbeddingQueueDep = Annotated[CvEmbeddingQueue, Depends(get_cv_embedding_queue)]
 
 
 async def rate_limit_sync(request: Request, user: CurrentUserDep) -> None:

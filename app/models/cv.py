@@ -1,10 +1,13 @@
 import enum
 import uuid
+from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import ARRAY, CheckConstraint, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, pg_enum
+from app.models.job import EMBEDDING_DIM
 
 
 class CvFormat(enum.StrEnum):
@@ -25,6 +28,14 @@ class Cv(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         # Mirrors app.cv.skills.MAX_SKILLS: the database refuses an oversized list too.
         CheckConstraint("cardinality(skills) <= 100", name="skills_max_100"),
+        # A vector always comes with the model that made it, the hash of what was embedded and
+        # the time: all three or none.
+        CheckConstraint(
+            "(embedding IS NULL) = (embedding_model IS NULL) "
+            "AND (embedding IS NULL) = (embedding_text_hash IS NULL) "
+            "AND (embedding IS NULL) = (embedded_at IS NULL)",
+            name="embedding_complete",
+        ),
     )
 
     # unique=True: at most one CV per user, enforced by the database (so two simultaneous first
@@ -43,6 +54,13 @@ class Cv(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # `skills_edited` says which of the two this list is. Uploading a new CV re-extracts it.
     skills: Mapped[list[str]] = mapped_column(ARRAY(String(50)), default=list, server_default="{}")
     skills_edited: Mapped[bool] = mapped_column(default=False, server_default="false")
+
+    # The CV's embedding (the normalised mean of its text chunks), written only by
+    # services/embedding_service.py. It is computed on this machine and is never sent anywhere.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), default=None)
+    embedding_model: Mapped[str | None] = mapped_column(String(100), default=None)
+    embedding_text_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    embedded_at: Mapped[datetime | None] = mapped_column(default=None)
 
     def __repr__(self) -> str:
         # The default repr would print every column, and a debugger, a log line or a failed

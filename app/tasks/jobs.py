@@ -5,12 +5,8 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from enum import StrEnum
 
-from kombu.exceptions import KombuError
-from redis.exceptions import RedisError
 from sqlalchemy import select
-from sqlalchemy.exc import InterfaceError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.extraction.limits import (
@@ -23,9 +19,12 @@ from app.llm.client import build_client
 from app.models import Source, SourceType
 from app.services import auth_service, extraction_service, extraction_sweep, ingestion_service
 from app.services.cooldown import Cooldown
-from app.services.extraction_types import ExtractionOutcome, ExtractionResult, SessionFactory
+from app.services.extraction_types import ExtractionOutcome, ExtractionResult
 from app.tasks.celery_app import HARD_TIME_LIMIT_SECONDS, SOFT_TIME_LIMIT_SECONDS, celery_app
+from app.tasks.common import ENQUEUE_ERRORS, RETRYABLE_ERRORS
+from app.tasks.common import session_factory as _session_factory
 from app.tasks.cooldown import redis_cooldown_for
+from app.tasks.embedding import enqueue_embed_job
 from app.tasks.locking import SourceLocks, redis_job_locks_for, redis_locks_for
 
 logger = logging.getLogger(__name__)
@@ -40,39 +39,32 @@ SPREAD_WINDOW_SECONDS = 30.0
 SWEEP_SOFT_TIME_LIMIT_SECONDS = 120
 SWEEP_HARD_TIME_LIMIT_SECONDS = 150
 
-# What publishing a task can raise when Redis is unreachable. A failed publish is logged, never
-# raised into the caller: ingestion must not fail because extraction could not be queued, since the
-# sweep queues whatever was missed.
-ENQUEUE_ERRORS = (KombuError, RedisError, OSError)
-
 PURGE_SOFT_TIME_LIMIT_SECONDS = 240  # a big purge may take a while; it commits in batches
 PURGE_HARD_TIME_LIMIT_SECONDS = 300
 
-# Failures worth retrying: Redis or the database being briefly unreachable. Anything else (a bug)
-# is not retried, because running it again would just fail the same way.
-RETRYABLE_ERRORS = (RedisError, OperationalError, InterfaceError)
+# ENQUEUE_ERRORS and RETRYABLE_ERRORS live in `app.tasks.common` (shared with the embedding tasks)
+# and are imported above, so `from app.tasks.jobs import RETRYABLE_ERRORS` keeps working.
 
 
 Enqueue = Callable[[uuid.UUID, float], None]  # (job id, delay in seconds)
+
+# Outcomes of `extract_job` after which there is nothing to embed: no job, no usable result, or
+# another run holds the job (that run queues the embedding itself).
+NO_EMBEDDING_AFTER = frozenset(
+    {
+        ExtractionOutcome.NOT_FOUND.value,
+        ExtractionOutcome.FAILED.value,
+        ExtractionOutcome.NOT_A_JOB.value,
+        ExtractionOutcome.LOST_RACE.value,
+        "skipped_locked",
+    }
+)
 
 
 class IngestOutcome(StrEnum):
     INGESTED = "ingested"
     SKIPPED_LOCKED = "skipped_locked"  # another run of this source is in progress
     SKIPPED_MISSING = "skipped_missing"  # the source was deleted after the task was queued
-
-
-@asynccontextmanager
-async def _session_factory(settings: Settings) -> AsyncIterator[SessionFactory]:
-    """A session factory on a brand-new, throwaway engine (see `_session` for why).
-
-    The extraction service opens several short sessions per run, so it needs the factory itself.
-    """
-    engine = create_async_engine(settings.database_url, poolclass=NullPool)
-    try:
-        yield async_sessionmaker(engine, expire_on_commit=False)
-    finally:
-        await engine.dispose()
 
 
 @asynccontextmanager
@@ -248,8 +240,34 @@ async def _extract(
     max_retries=3,
 )
 def extract_job(job_id: str) -> str:
-    """Celery task: extract one job (rules first, then the model if it is needed and allowed)."""
-    return run_extract_job(uuid.UUID(job_id))
+    """Celery task: extract one job (rules first, then the model if it is needed and allowed).
+
+    Afterwards the job is queued for embedding (a no-op when embeddings are off). The embedding
+    run decides for itself whether there is anything to embed, so it is queued after every
+    outcome that can leave an extracted job behind; a failed publish only logs, because the
+    embedding sweep finds the job later.
+    """
+    outcome = run_extract_job(uuid.UUID(job_id))
+    queue_embedding_after(uuid.UUID(job_id), outcome)
+    return outcome
+
+
+def queue_embedding_after(
+    job_id: uuid.UUID, outcome: str, enqueue: Callable[[uuid.UUID], None] | None = None
+) -> bool:
+    """Queue the embedding of a job after an extraction run. True if it was queued.
+
+    A failed publish only logs: the embedding sweep finds the job later.
+    """
+    if outcome in NO_EMBEDDING_AFTER:
+        return False
+    publish = enqueue or enqueue_embed_job
+    try:
+        publish(job_id)
+    except ENQUEUE_ERRORS:
+        logger.warning("Job %s was not queued for embedding; the sweep will", job_id)
+        return False
+    return True
 
 
 # --- the sweep -----------------------------------------------------------------------------------

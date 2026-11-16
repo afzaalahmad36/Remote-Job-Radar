@@ -5,8 +5,14 @@ name: remote-job-radar
 # What api, worker and beat have in common: the same image, config and environment. They differ
 # only in the command they run. (`&app` names this block; `<<: *app` copies it into a service.)
 x-app: &app
-  build: .
-  image: remote-job-radar:dev # one image, tagged once, for all three services
+  build:
+    context: .
+    args:
+      # 1 (the default here) puts the embedding model's weights into the image, so the runtime
+      # never needs the internet. The CI build leaves it at the Dockerfile's default, 0, and so
+      # never contacts Hugging Face. `EMBEDDING_MODEL_DOWNLOAD=0 docker compose build` skips it.
+      EMBEDDING_MODEL_DOWNLOAD: ${EMBEDDING_MODEL_DOWNLOAD:-1}
+  image: remote-job-radar:dev # one image, tagged once, for all four app services
   env_file: .env # SECRET_KEY, CORS_ORIGINS, API keys, ... (copy .env.example to .env first)
   environment:
     # `environment` wins over `env_file`: inside the network the hosts are the service names.
@@ -16,6 +22,8 @@ x-app: &app
 services:
   db:
     image: pgvector/pgvector:pg16
+    # On both networks: the app services reach it over `default`, worker-embed over `embed`.
+    networks: [default, embed]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres # local development only
@@ -32,6 +40,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    networks: [default, embed]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -76,6 +85,9 @@ services:
       # dozen feeds; each extra process is another feed fetched in parallel, and more memory).
       - --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
       - --hostname=worker@%h # a fixed name prefix, so the healthcheck can address this worker
+      # Only the default queue. The `embed` queue belongs to worker-embed, so the embedding model
+      # is loaded in that one small process and never here.
+      - --queues=celery
     depends_on:
       db:
         condition: service_healthy
@@ -119,6 +131,58 @@ services:
     # No healthcheck, on purpose: beat has no remote-control/inspect interface to ask, and it is
     # the container's main process, so if it crashes the container exits and Docker shows that.
     # A "process exists" check would only repeat what the container state already says.
+
+  # Computes embeddings: the only process that loads the model, and the only one that handles CV
+  # text for it. One task at a time (--concurrency=1), one text at a time inside it (batch size 1),
+  # so it peaks near 330 MB. Two guards on memory: `--max-memory-per-child` replaces the process
+  # when it grows past ~371 MiB, and `mem_limit` stops it from taking the machine's memory.
+  worker-embed:
+    <<: *app
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=1
+      - --queues=embed
+      - --hostname=embed@%h
+      - --max-memory-per-child=380000 # KiB
+    # `embed` is an internal network (see below): this service can reach db and redis, and has no
+    # route to the internet. It does not need one (the weights are in the image), and a process
+    # that reads CV text should not have one. It is NOT on `default`, so it cannot reach api either.
+    networks: [embed]
+    mem_limit: 512m
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/jobradar
+      REDIS_URL: redis://redis:6379/0
+      # The CV-handling process has no language model configured at all, whatever .env says.
+      LLM_PROVIDER: none
+      LLM_EXTRACTION_ENABLED: "false"
+      GEMINI_API_KEY: ""
+      HF_HUB_OFFLINE: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    stop_grace_period: 100s
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery -A app.tasks.celery_app inspect ping --destination embed@$$HOSTNAME --timeout 10 >/dev/null || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+networks:
+  # No gateway to the outside: containers attached only to this network cannot reach the internet
+  # (and cannot resolve outside names). db and redis are on it as well as on `default`.
+  embed:
+    internal: true
 
 volumes:
   pgdata:

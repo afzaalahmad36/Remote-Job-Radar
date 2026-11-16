@@ -24,7 +24,7 @@ def services(compose: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def test_the_stack_has_exactly_these_services(services: dict[str, Any]) -> None:
-    assert set(services) == {"db", "redis", "api", "worker", "beat"}
+    assert set(services) == {"db", "redis", "api", "worker", "worker-embed", "beat"}
 
 
 def test_only_the_api_publishes_a_port_and_only_on_localhost(services: dict[str, Any]) -> None:
@@ -38,11 +38,11 @@ def test_nothing_sets_a_container_name(services: dict[str, Any], compose: dict[s
     assert compose["name"] == "remote-job-radar"
 
 
-def test_api_worker_and_beat_share_one_image_and_environment(services: dict[str, Any]) -> None:
-    app_services = [services[name] for name in ("api", "worker", "beat")]
+def test_the_app_services_share_one_image_and_environment(services: dict[str, Any]) -> None:
+    app_services = [services[name] for name in ("api", "worker", "worker-embed", "beat")]
 
     assert len({service["image"] for service in app_services}) == 1
-    assert all(service["build"] == "." for service in app_services)
+    assert all(service["build"]["context"] == "." for service in app_services)
     for service in app_services:  # inside the network, the hosts are the service names
         assert service["environment"]["DATABASE_URL"].endswith("@db:5432/jobradar")
         assert service["environment"]["REDIS_URL"] == "redis://redis:6379/0"

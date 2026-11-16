@@ -1,7 +1,15 @@
+import logging
+
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.api_deps import CurrentUserDep, SessionDep, SettingsDep, rate_limit_cv
-from app.core.exceptions import CvTooLargeError
+from app.api_deps import (
+    CurrentUserDep,
+    CvEmbeddingQueueDep,
+    SessionDep,
+    SettingsDep,
+    rate_limit_cv,
+)
+from app.core.exceptions import CvTooLargeError, QueueUnavailableError
 from app.schemas.cv import (
     CvRead,
     CvSkillsRead,
@@ -12,6 +20,8 @@ from app.schemas.cv import (
 )
 from app.services import cv_service
 from app.services.cv_service import CvLimits, SkillsView
+
+logger = logging.getLogger(__name__)
 
 # Every endpoint takes CurrentUserDep, so all of them answer 401 without a valid access token.
 router = APIRouter(prefix="/cv", tags=["cv"])
@@ -46,7 +56,11 @@ async def read_limited_body(request: Request, max_bytes: int) -> bytes:
 
 @router.put("", dependencies=[Depends(rate_limit_cv)], openapi_extra=_UPLOAD_BODY_DOC)
 async def put_cv(
-    request: Request, user: CurrentUserDep, session: SessionDep, settings: SettingsDep
+    request: Request,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    embedding_queue: CvEmbeddingQueueDep,
 ) -> CvRead:
     """Upload (or replace) your CV: send the PDF or plain text itself as the request body, with
     `Content-Type: application/pdf` or `text/plain`. Only the text is kept, with emails, phone
@@ -61,6 +75,12 @@ async def put_cv(
         pdf_memory_limit_mb=settings.cv_pdf_memory_limit_mb,
     )
     cv = await cv_service.save_cv(session, user.id, data, content_type, limits)
+    # The embedding is made later, on this machine, by the embed worker; a failed publish never
+    # fails the upload (the embedding sweep finds a CV without a vector).
+    try:
+        await embedding_queue.enqueue_cv_embedding(user.id)
+    except QueueUnavailableError:
+        logger.warning("The CV of user %s was not queued for embedding; the sweep will", user.id)
     return CvRead.model_validate(cv)
 
 
