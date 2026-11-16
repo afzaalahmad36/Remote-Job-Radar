@@ -1,7 +1,8 @@
+import re
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MIN_PRODUCTION_SECRET_LENGTH = 32
@@ -99,6 +100,44 @@ class Settings(BaseSettings):
     # Max CV uploads per user within the window (each one may start a PDF-reading process).
     cv_rate_limit_attempts: int = Field(default=5, gt=0)
     cv_rate_limit_window_seconds: int = Field(default=60, gt=0)
+
+    # --- Embeddings (Phase 4). Vectors are computed on this machine; no text leaves it ----------
+    # "none" computes nothing (the default). "fastembed" runs the model below with onnxruntime in
+    # the `worker-embed` service. "fake" gives deterministic test vectors and is refused in
+    # production.
+    embedding_provider: Literal["none", "fastembed", "fake"] = "none"
+    # The model's name as fastembed knows it. The `vector(384)` columns fix the dimension: a model
+    # with another dimension needs a migration, not just a new name.
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    # The exact Hugging Face revision (commit) of the weights. fastembed maps the name above to the
+    # repo `Qdrant/bge-small-en-v1.5-onnx-Q` (int8); this is that repo's commit. The Dockerfile
+    # downloads exactly this revision, the runtime loads exactly this folder (never the network),
+    # and `embedding_model@revision` is stored with every vector, so vectors of different weights
+    # are never mixed. Keep it equal to the Dockerfile's EMBEDDING_MODEL_REVISION (a test checks).
+    embedding_model_revision: str = "aa8f8b060edb00e03bfdd08813a2949946c8ba55"
+    # Where the weights are (fastembed's cache layout). The image puts them in /models.
+    embedding_cache_dir: str = "/models"
+
+    @field_validator("embedding_provider", mode="before")
+    @classmethod
+    def _blank_provider_means_none(cls, value: object) -> object:
+        """Earlier copies of `.env.example` have a bare `EMBEDDING_PROVIDER=`: that is "off"."""
+        return "none" if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _check_embedding_settings(self) -> Self:
+        if self.embedding_provider == "fake" and self.env == "production":
+            raise ValueError("EMBEDDING_PROVIDER=fake is not allowed in production")
+        if self.embedding_provider == "fastembed" and not re.fullmatch(
+            r"[0-9a-f]{40}", self.embedding_model_revision
+        ):
+            raise ValueError("EMBEDDING_MODEL_REVISION must be a 40-character commit hash")
+        return self
+
+    @property
+    def embedding_model_id(self) -> str:
+        """What is stored in `embedding_model` next to every vector: the name and the revision."""
+        return f"{self.embedding_model}@{self.embedding_model_revision}"
 
     @model_validator(mode="after")
     def _check_llm_settings(self) -> Self:
