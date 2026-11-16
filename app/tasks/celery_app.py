@@ -12,6 +12,12 @@ from app.core.config import Settings, get_settings
 SOFT_TIME_LIMIT_SECONDS = 60
 HARD_TIME_LIMIT_SECONDS = 90
 
+# Two queues, read by two different services. The main worker reads only DEFAULT_QUEUE (it is
+# started with `-Q celery`); only `worker-embed` reads EMBED_QUEUE, so the embedding model is
+# loaded in that one small process and never in the API or the main worker.
+DEFAULT_QUEUE = "celery"
+EMBED_QUEUE = "embed"
+
 PURGE_AT_UTC = {"hour": 3, "minute": 17}  # daily, at a quiet time
 # How often the extraction sweep runs. A constant, not a setting: it is a safety net (it picks up
 # jobs whose task was lost and gives up on old ones), not something to tune per deployment.
@@ -49,6 +55,13 @@ def build_config(settings: Settings) -> dict[str, Any]:
         "task_time_limit": HARD_TIME_LIMIT_SECONDS,
         # A worker process takes one task at a time instead of hoarding a batch, so one slow
         # feed cannot hold up tasks that another process could be running.
+        "task_default_queue": DEFAULT_QUEUE,
+        # Only the two tasks that run the model go to the embed queue. The embedding sweep only
+        # reads the database and publishes, so the main worker runs it.
+        "task_routes": {
+            "embed_job": {"queue": EMBED_QUEUE},
+            "embed_cv": {"queue": EMBED_QUEUE},
+        },
         "worker_prefetch_multiplier": 1,
         "worker_concurrency": settings.celery_worker_concurrency,
         "timezone": "UTC",
@@ -79,6 +92,11 @@ def build_config(settings: Settings) -> dict[str, Any]:
                 "task": "sweep_extraction",
                 "schedule": float(SWEEP_INTERVAL_SECONDS),
                 # A sweep that waited longer than one interval is stale: the next one is due.
+                "options": {"expires": SWEEP_INTERVAL_SECONDS},
+            },
+            "sweep-embeddings": {
+                "task": "sweep_embeddings",
+                "schedule": float(SWEEP_INTERVAL_SECONDS),
                 "options": {"expires": SWEEP_INTERVAL_SECONDS},
             },
             "purge-expired-refresh-tokens": {
@@ -112,5 +130,5 @@ class _LazyConfig(Mapping[str, Any]):
 
 
 # `include` makes workers import the task module on start-up, which registers the tasks.
-celery_app = Celery("job_radar", include=["app.tasks.jobs"])
+celery_app = Celery("job_radar", include=["app.tasks.jobs", "app.tasks.embedding"])
 celery_app.config_from_object(_LazyConfig())

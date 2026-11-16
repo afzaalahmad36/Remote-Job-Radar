@@ -6,6 +6,7 @@ from redis.exceptions import RedisError
 
 from app.core.exceptions import QueueUnavailableError
 from app.tasks.celery_app import QUEUE_CALL_TIMEOUT_SECONDS
+from app.tasks.embedding import enqueue_embed_cv
 from app.tasks.jobs import extract_job, ingest_source
 from app.tasks.locking import SourceLocks
 
@@ -59,6 +60,13 @@ class CeleryTaskQueue:
             )
         except (RedisError, TimeoutError) as error:
             raise QueueUnavailableError("The extraction queue is unavailable") from error
+
+    async def enqueue_cv_embedding(self, user_id: uuid.UUID) -> None:
+        """Ask for the user's CV to be embedded (a no-op when embeddings are off)."""
+        try:
+            await asyncio.wait_for(asyncio.to_thread(enqueue_embed_cv, user_id), self._call_timeout)
+        except (KombuError, RedisError, TimeoutError) as error:
+            raise QueueUnavailableError("The embedding queue is unavailable") from error
 
     async def enqueue_extraction(self, job_id: uuid.UUID, countdown: float = 0.0) -> None:
         try:

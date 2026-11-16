@@ -77,6 +77,9 @@ class FakeTaskQueue:
         self.extraction_enqueued: list[tuple[uuid.UUID, float]] = []
         self.extracting: set[uuid.UUID] = set()  # jobs that "have an extraction in progress"
         self.fail_extraction_enqueue_with: Exception | None = None
+        # The CV embedding side (PUT /cv): which users' CVs were queued for embedding.
+        self.cv_embedding_enqueued: list[uuid.UUID] = []
+        self.fail_cv_embedding_enqueue_with: Exception | None = None
 
     async def is_syncing(self, source_id: uuid.UUID) -> bool:
         self.is_syncing_calls.append(source_id)
@@ -98,6 +101,11 @@ class FakeTaskQueue:
         if self.fail_extraction_enqueue_with:
             raise self.fail_extraction_enqueue_with
         self.extraction_enqueued.append((job_id, countdown))
+
+    async def enqueue_cv_embedding(self, user_id: uuid.UUID) -> None:
+        if self.fail_cv_embedding_enqueue_with:
+            raise self.fail_cv_embedding_enqueue_with
+        self.cv_embedding_enqueued.append(user_id)
 
 
 class FakeSourceLocks:

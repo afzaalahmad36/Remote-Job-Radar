@@ -242,7 +242,7 @@ def test_the_task_uses_its_own_throwaway_engine_not_the_apps(
     def forbidden() -> None:
         raise AssertionError("the app's cached engine belongs to another event loop")
 
-    monkeypatch.setattr("app.tasks.jobs.create_async_engine", spy)
+    monkeypatch.setattr("app.tasks.common.create_async_engine", spy)
     monkeypatch.setattr("app.db.session.get_engine", forbidden)
     source_id = seed.source(seed.user())
 
