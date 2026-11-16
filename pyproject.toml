@@ -10,8 +10,10 @@ dependencies = [
     "asyncpg>=0.32.0",
     "celery[redis]>=5.6.3",
     "fastapi>=0.162.0",
+    "fastembed>=0.9.1",
     "feedparser>=6.0.14",
     "httpx>=0.28.1",
+    "pgvector>=0.5.1",
     "pydantic-settings>=2.16.1",
     "pydantic[email]>=2.14.1",
     "pyjwt>=2.15.1",
@@ -39,13 +41,13 @@ files = ["app", "scripts"]
 
 [[tool.mypy.overrides]]
 # These libraries ship no type hints; what they return is treated as Any and narrowed by us.
-module = ["feedparser", "celery", "celery.*", "kombu", "kombu.*"]
+module = ["feedparser", "celery", "celery.*", "kombu", "kombu.*", "onnxruntime"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Celery's @task decorator is untyped, so the decorated functions look untyped to mypy. Only the
 # decorator is affected: the functions' own bodies and signatures are still checked strictly.
-module = ["app.tasks.jobs"]
+module = ["app.tasks.jobs", "app.tasks.embedding"]
 disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
@@ -61,6 +63,11 @@ timeout = 60
 # Print every thread's stack if a test is still running after this long: a warning shot at 50 s,
 # before the 60 s limit above fails it.
 faulthandler_timeout = 50
+# Tests marked `model` need the real embedding model's weights, which only the Docker image has.
+# They are left out of every normal run and of CI; run them with `-m model` (see the docstring of
+# tests/integration/test_fastembed_model.py).
+markers = ["model: needs the real embedding model files (run in Docker, never in CI)"]
+addopts = "-m 'not model'"
 
 [tool.coverage.run]
 # SQLAlchemy's async layer runs on greenlets; without this, coverage loses track of the lines

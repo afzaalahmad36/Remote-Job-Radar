@@ -2,6 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
     CheckConstraint,
@@ -15,6 +16,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, pg_enum
+
+# Length of every embedding vector: fixed by the model (bge-small) and by the `vector(384)`
+# columns. A model with another length needs a migration.
+EMBEDDING_DIM = 384
 
 
 class RemotePolicy(enum.StrEnum):
@@ -93,6 +98,20 @@ class Job(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "extraction_status <> 'extracted' OR title IS NOT NULL",
             name="extracted_has_title",
         ),
+        # Embedding sweep: extracted jobs that have no vector yet, oldest first.
+        Index(
+            "ix_jobs_embedding_pending",
+            "created_at",
+            postgresql_where=text("embedding IS NULL AND extraction_status = 'extracted'"),
+        ),
+        # A vector always comes with the model that made it, the hash of what was embedded and
+        # the time: all three or none.
+        CheckConstraint(
+            "(embedding IS NULL) = (embedding_model IS NULL) "
+            "AND (embedding IS NULL) = (embedding_text_hash IS NULL) "
+            "AND (embedding IS NULL) = (embedded_at IS NULL)",
+            name="embedding_complete",
+        ),
     )
 
     source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
@@ -149,3 +168,12 @@ class Job(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # be used up by the system's own re-runs.
     extraction_attempts: Mapped[int] = mapped_column(default=0, server_default="0")
     extraction_retries: Mapped[int] = mapped_column(default=0, server_default="0")
+
+    # --- embedding (Phase 4). Written only by services/embedding_service.py ---------------------
+    # 384 numbers placing the job in "meaning space". NULL until the embed task has run.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), default=None)
+    # "name@revision" of the model that made the vector (vectors of different models never mix).
+    embedding_model: Mapped[str | None] = mapped_column(String(100), default=None)
+    # Hash of the exact text that was embedded (and the model): same hash, nothing to redo.
+    embedding_text_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    embedded_at: Mapped[datetime | None] = mapped_column(default=None)
