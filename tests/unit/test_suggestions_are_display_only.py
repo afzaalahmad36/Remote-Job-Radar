@@ -67,6 +67,8 @@ def scoring_files(root: Path) -> list[Path]:
     files = set((root / "matching").rglob("*.py")) if (root / "matching").is_dir() else set()
     files |= {path for path in root.rglob("*.py") if "scor" in path.stem.lower()}
     files |= {path for path in root.rglob("*.py") if "matching" in path.relative_to(root).parts}
+    # The service and the repository that feed the scorer (match_service, match_repository, ...).
+    files |= {path for path in root.rglob("*.py") if "match" in path.stem.lower()}
     return sorted(files)
 
 
@@ -114,9 +116,15 @@ def test_the_scan_catches_a_scoring_module_that_reads_them(tmp_path: Path) -> No
     assert found == {"scoring.py", "by_name.py", "scoring_helpers.py"}
 
 
-def test_the_scan_covers_the_files_it_is_meant_to_even_before_matching_exists() -> None:
-    # When Phase 4 adds app/matching/, its files join the scan with no change to this test.
-    assert all(path.suffix == ".py" for path in scoring_files(APP))
+def test_the_scan_covers_the_scorer_and_the_code_that_feeds_it() -> None:
+    covered = {path.relative_to(APP) for path in scoring_files(APP)}
+
+    assert {
+        Path("matching") / "scoring.py",
+        Path("matching") / "inputs_hash.py",
+        Path("services") / "match_service.py",
+        Path("repositories") / "match_repository.py",
+    } <= covered
 
 
 # --- not part of what is stored --------------------------------------------------------------

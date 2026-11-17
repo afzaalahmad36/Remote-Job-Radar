@@ -215,6 +215,9 @@ def celery_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost/x")
     monkeypatch.setenv("REDIS_URL", UNREACHABLE_REDIS_URL)
     monkeypatch.setenv("SECRET_KEY", "celery-test-secret-key-at-least-32-chars")
+    # Environment variables beat the .env file, so a developer who turned embeddings on locally
+    # does not change what these tests see.
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "none")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
