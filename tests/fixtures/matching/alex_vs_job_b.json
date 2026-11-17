@@ -1,0 +1,26 @@
+{
+  "scorer_version": "score_v1",
+  "score": 0,
+  "cap_applied": false,
+  "weights": {
+    "configured": {"skills": 0.6, "embedding": 0.4},
+    "effective": {"skills": 0.6, "embedding": 0.4}
+  },
+  "components": {
+    "skills": {"coverage": 0.0, "matched": 0, "total": 4, "cv_skills": 15},
+    "embedding": {"cosine": 0.58, "floor": 0.715, "ceiling": 0.86, "normalised": 0.0}
+  },
+  "skills": {"matched": [], "missing": ["Java", "Spring", "Angular", "MySQL"]},
+  "filters": [
+    {"name": "remote_policy", "outcome": "fail", "job": "onsite", "preference": ["remote"]},
+    {"name": "seniority", "outcome": "fail", "job": "junior", "preference": ["senior", "lead"]},
+    {
+      "name": "salary",
+      "outcome": "unknown",
+      "job": {"max": 40000, "currency": "EUR", "period": "year"},
+      "preference": {"min": 100000, "currency": "USD", "period": "year"},
+      "reason": "currency_differs"
+    }
+  ],
+  "notes": ["filters_failed"]
+}

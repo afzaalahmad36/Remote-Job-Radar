@@ -139,6 +139,27 @@ class Settings(BaseSettings):
         """What is stored in `embedding_model` next to every vector: the name and the revision."""
         return f"{self.embedding_model}@{self.embedding_model_revision}"
 
+    # Job scoring (docs/MATCHING.md). The defaults were fixed before any scoring test or evaluation:
+    # the floor and the ceiling are the P50 and P99 of the cosine similarity of random pairs of
+    # stored jobs (scripts/calibrate_similarity.py). Changing any of these re-scores every match
+    # (they are part of each match's inputs_hash); a change of the formula bumps SCORER_VERSION.
+    match_weight_skills: float = Field(default=0.6, ge=0.0, le=1.0)
+    match_weight_embedding: float = Field(default=0.4, ge=0.0, le=1.0)
+    match_similarity_floor: float = Field(default=0.715, ge=-1.0, le=1.0)
+    match_similarity_ceiling: float = Field(default=0.86, ge=-1.0, le=1.0)
+    # A job that fails a hard filter keeps its place but its score cannot exceed this.
+    match_failed_filter_cap: int = Field(default=30, ge=0, le=100)
+    # How many nearest jobs (by cosine distance) one scoring run looks at.
+    match_candidates: int = Field(default=200, ge=1, le=1_000)
+
+    @model_validator(mode="after")
+    def _check_match_settings(self) -> Self:
+        if abs(self.match_weight_skills + self.match_weight_embedding - 1.0) > 1e-6:
+            raise ValueError("MATCH_WEIGHT_SKILLS and MATCH_WEIGHT_EMBEDDING must add up to 1")
+        if self.match_similarity_floor >= self.match_similarity_ceiling:
+            raise ValueError("MATCH_SIMILARITY_FLOOR must be smaller than MATCH_SIMILARITY_CEILING")
+        return self
+
     @model_validator(mode="after")
     def _check_llm_settings(self) -> Self:
         if self.llm_provider == "fake" and self.env == "production":

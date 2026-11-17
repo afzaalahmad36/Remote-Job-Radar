@@ -1,0 +1,30 @@
+{
+  "scorer_version": "score_v1",
+  "score": 68,
+  "cap_applied": false,
+  "weights": {
+    "configured": {"skills": 0.6, "embedding": 0.4},
+    "effective": {"skills": 0.6, "embedding": 0.4}
+  },
+  "components": {
+    "skills": {"coverage": 0.833, "matched": 5, "total": 6, "cv_skills": 15},
+    "embedding": {"cosine": 0.78, "floor": 0.715, "ceiling": 0.86, "normalised": 0.448}
+  },
+  "skills": {
+    "matched": ["Python", "FastAPI", "PostgreSQL", "Docker", "Kubernetes"],
+    "missing": ["Terraform"]
+  },
+  "filters": [
+    {"name": "remote_policy", "outcome": "pass", "job": "remote", "preference": ["remote"]},
+    {"name": "seniority", "outcome": "pass", "job": "senior", "preference": ["senior", "lead"]},
+    {
+      "name": "salary",
+      "outcome": "pass",
+      "job": {"max": 130000, "currency": "USD", "period": "year"},
+      "preference": {"min": 100000, "currency": "USD", "period": "year"},
+      "job_per_year": 130000,
+      "preference_per_year": 100000
+    }
+  ],
+  "notes": []
+}
