@@ -10,6 +10,7 @@ from app.models.job import (
     SalaryPeriod,
     Seniority,
 )
+from app.models.job_match import JobMatch
 from app.models.llm_usage import LlmUsageEntry
 from app.models.preferences import JobPreferences
 from app.models.refresh_token import RefreshToken
@@ -22,6 +23,7 @@ __all__ = [
     "ExtractionMethod",
     "ExtractionStatus",
     "Job",
+    "JobMatch",
     "JobPreferences",
     "LlmEnrichment",
     "LlmUsageEntry",
