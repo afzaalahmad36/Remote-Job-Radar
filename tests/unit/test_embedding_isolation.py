@@ -151,7 +151,7 @@ def test_the_api_and_the_main_worker_load_no_model_library() -> None:
         "import sys, json\n"
         f"sys.path.insert(0, {str(ROOT)!r})\n"
         "import app.main, app.tasks.celery_app, app.tasks.jobs\n"
-        "import app.tasks.embedding, app.tasks.queue\n"
+        "import app.tasks.embedding, app.tasks.queue, app.tasks.matching\n"
         "from app.matching import factory, embeddings, fake_embedder\n"
         f"libs = {MODEL_LIBRARIES!r}\n"
         "print(json.dumps(sorted(m for m in libs if m in sys.modules)))\n"
