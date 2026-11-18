@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 
-from app.api_deps import CurrentUserDep, SessionDep
+from app.api_deps import CurrentUserDep, MatchQueueDep, SessionDep
 from app.schemas.preferences import PreferencesRead, PreferencesWrite
-from app.services import preferences_service
+from app.services import match_status_service, preferences_service
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
 
@@ -27,9 +27,10 @@ async def get_preferences(user: CurrentUserDep, session: SessionDep) -> Preferen
 
 @router.put("")
 async def put_preferences(
-    body: PreferencesWrite, user: CurrentUserDep, session: SessionDep
+    body: PreferencesWrite, user: CurrentUserDep, session: SessionDep, match_queue: MatchQueueDep
 ) -> PreferencesRead:
-    """Save your preferences. The body replaces what was stored: a field left out is cleared."""
-    return PreferencesRead.model_validate(
-        await preferences_service.save_preferences(session, user.id, body)
-    )
+    """Save your preferences. The body replaces what was stored: a field left out is cleared.
+    Your matches are scored again in the background."""
+    saved = await preferences_service.save_preferences(session, user.id, body)
+    await match_status_service.publish_request(match_queue, user.id)
+    return PreferencesRead.model_validate(saved)
