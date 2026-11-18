@@ -15,6 +15,7 @@ from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_PAGE_
 from app.services import auth_service
 from app.services.embedding_service import CvEmbeddingQueue
 from app.services.extraction_retry import ExtractionQueue
+from app.services.match_status_service import MatchScoringQueue
 from app.services.sync_service import TaskQueue
 from app.tasks.locking import redis_job_locks_for, redis_locks_for
 from app.tasks.queue import CeleryTaskQueue
@@ -93,6 +94,15 @@ def get_cv_embedding_queue(settings: SettingsDep) -> CvEmbeddingQueue:
 CvEmbeddingQueueDep = Annotated[CvEmbeddingQueue, Depends(get_cv_embedding_queue)]
 
 
+def get_match_queue(settings: SettingsDep) -> MatchScoringQueue:
+    """The same queue, seen from the endpoints that change what a score reads; tests
+    override it."""
+    return CeleryTaskQueue(redis_locks_for(settings.redis_url))
+
+
+MatchQueueDep = Annotated[MatchScoringQueue, Depends(get_match_queue)]
+
+
 async def rate_limit_sync(request: Request, user: CurrentUserDep) -> None:
     """Limit manual syncs per user: each one makes outbound HTTP requests on the server."""
     limiter: RateLimiter = request.app.state.sync_rate_limiter
@@ -103,6 +113,12 @@ async def rate_limit_extract(request: Request, user: CurrentUserDep) -> None:
     """Limit extraction retries per user, in a bucket of their own (not shared with syncs)."""
     limiter: RateLimiter = request.app.state.extract_rate_limiter
     limiter.check(f"extract:{user.id}")
+
+
+async def rate_limit_rescore(request: Request, user: CurrentUserDep) -> None:
+    """Limit manual re-scores per user, in a bucket of their own."""
+    limiter: RateLimiter = request.app.state.rescore_rate_limiter
+    limiter.check(f"rescore:{user.id}")
 
 
 async def rate_limit_cv(request: Request, user: CurrentUserDep) -> None:

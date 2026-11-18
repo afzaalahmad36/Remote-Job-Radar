@@ -26,6 +26,7 @@ from app.tasks.common import session_factory as _session_factory
 from app.tasks.cooldown import redis_cooldown_for
 from app.tasks.embedding import enqueue_embed_job
 from app.tasks.locking import SourceLocks, redis_job_locks_for, redis_locks_for
+from app.tasks.matching import request_scoring_after_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,8 @@ def extract_job(job_id: str) -> str:
     """
     outcome = run_extract_job(uuid.UUID(job_id))
     queue_embedding_after(uuid.UUID(job_id), outcome)
+    # With embeddings off nothing is embedded, so the extraction is what changed the matches.
+    request_scoring_after_extraction(uuid.UUID(job_id), outcome)
     return outcome
 
 

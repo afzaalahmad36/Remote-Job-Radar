@@ -27,19 +27,37 @@ from app.matching.scoring import (
 _PRECISION = 6  # decimals kept of the weights, floor and ceiling (floats must hash the same)
 
 
+def _config_part(config: ScoringConfig) -> list[float | int]:
+    return [
+        round(config.weight_skills, _PRECISION),
+        round(config.weight_embedding, _PRECISION),
+        round(config.similarity_floor, _PRECISION),
+        round(config.similarity_ceiling, _PRECISION),
+        config.failed_filter_cap,
+    ]
+
+
+def scoring_fingerprint(config: ScoringConfig) -> str:
+    """A digest of the scorer version and every setting a score depends on.
+
+    Stored in `match_status` after a run. When it differs from the current one (a setting or the
+    scorer version changed), the sweep asks for every user to be scored again.
+    """
+    canonical = json.dumps(
+        {"scorer": SCORER_VERSION, "config": _config_part(config)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
 def match_inputs_hash(
     *, cv: CvFacts, preferences: PreferenceFacts | None, job: JobFacts, config: ScoringConfig
 ) -> str:
     """A 64-character hex digest of the inputs of one (CV, preferences, job) score."""
     document = {
         "scorer": SCORER_VERSION,
-        "config": [
-            round(config.weight_skills, _PRECISION),
-            round(config.weight_embedding, _PRECISION),
-            round(config.similarity_floor, _PRECISION),
-            round(config.similarity_ceiling, _PRECISION),
-            config.failed_filter_cap,
-        ],
+        "config": _config_part(config),
         "cv": {"skills": sorted(skill_keys(cv.skills)), "vector": cv.vector_id},
         "preferences": _preference_part(preferences),
         "job": {

@@ -27,6 +27,7 @@ from app.cv.skills import find_skills
 from app.cv.suggestions import Suggestions, suggest
 from app.cv.text import clean_cv_text, mask_cv_text
 from app.models import Cv, CvFormat
+from app.services import match_status_service
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,8 @@ async def delete_cv(session: AsyncSession, user_id: uuid.UUID) -> None:
     result = await session.execute(delete(Cv).where(Cv.user_id == user_id).returning(Cv.id))
     if result.first() is None:
         raise NotFoundError("No CV uploaded")
+    # Matches were ranked against this CV: remove them, and say scoring has to settle.
+    await match_status_service.clear_matches_and_request(session, user_id)
     await session.commit()
     logger.info("CV deleted: user=%s", user_id)
 
@@ -153,6 +156,7 @@ async def save_skills(session: AsyncSession, user_id: uuid.UUID, skills: list[st
     cv = await session.scalar(statement)
     if cv is None:
         raise NotFoundError("No CV uploaded")
+    await match_status_service.request_scoring(session, user_id, reset_failures=True)
     await session.commit()
     logger.info("CV skills saved: user=%s count=%d", user_id, len(skills))  # never the names
     return _skills_view(cv)
@@ -222,6 +226,8 @@ async def _upsert(
         .execution_options(populate_existing=True)
     )
     cv = await session.scalar(statement)
+    # The matches are stale now: record that in the same transaction as the new CV.
+    await match_status_service.request_scoring(session, user_id, reset_failures=True)
     await session.commit()
     assert cv is not None  # RETURNING always yields the row that was inserted or updated
     return cv

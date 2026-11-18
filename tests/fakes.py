@@ -80,6 +80,9 @@ class FakeTaskQueue:
         # The CV embedding side (PUT /cv): which users' CVs were queued for embedding.
         self.cv_embedding_enqueued: list[uuid.UUID] = []
         self.fail_cv_embedding_enqueue_with: Exception | None = None
+        # The scoring side: one entry per request to score a user's matches (user ids only).
+        self.match_enqueued: list[uuid.UUID] = []
+        self.fail_match_enqueue_with: Exception | None = None
 
     async def is_syncing(self, source_id: uuid.UUID) -> bool:
         self.is_syncing_calls.append(source_id)
@@ -101,6 +104,11 @@ class FakeTaskQueue:
         if self.fail_extraction_enqueue_with:
             raise self.fail_extraction_enqueue_with
         self.extraction_enqueued.append((job_id, countdown))
+
+    async def enqueue_match_scoring(self, user_id: uuid.UUID) -> None:
+        if self.fail_match_enqueue_with:
+            raise self.fail_match_enqueue_with
+        self.match_enqueued.append(user_id)
 
     async def enqueue_cv_embedding(self, user_id: uuid.UUID) -> None:
         if self.fail_cv_embedding_enqueue_with:
@@ -194,3 +202,26 @@ class FakeCooldown:
             raise CooldownUnavailable("down")
         self.started.append(seconds)
         self.seconds_left = max(self.seconds_left or 0.0, seconds)
+
+
+class ScoringRequests:
+    """Records the "re-score this user" requests the embed and extract tasks make after their
+    work, so those tests need neither a database for the status table nor a broker. Tests about
+    scoring itself call the real functions in `app.tasks.matching` with their own arguments."""
+
+    def __init__(self) -> None:
+        self.after_extraction: list[tuple[uuid.UUID, str]] = []
+        self.after_job_embedding: list[tuple[uuid.UUID, str]] = []
+        self.after_cv_embedding: list[tuple[uuid.UUID, str]] = []
+
+    def on_extraction(self, job_id: uuid.UUID, outcome: str) -> bool:
+        self.after_extraction.append((job_id, outcome))
+        return False
+
+    def on_job_embedding(self, job_id: uuid.UUID, outcome: str) -> bool:
+        self.after_job_embedding.append((job_id, outcome))
+        return False
+
+    def on_cv_embedding(self, user_id: uuid.UUID, outcome: str) -> bool:
+        self.after_cv_embedding.append((user_id, outcome))
+        return False

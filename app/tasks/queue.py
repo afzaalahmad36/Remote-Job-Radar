@@ -9,6 +9,7 @@ from app.tasks.celery_app import QUEUE_CALL_TIMEOUT_SECONDS
 from app.tasks.embedding import enqueue_embed_cv
 from app.tasks.jobs import extract_job, ingest_source
 from app.tasks.locking import SourceLocks
+from app.tasks.matching import enqueue_match_scoring as publish_match_scoring
 
 
 class CeleryTaskQueue:
@@ -67,6 +68,15 @@ class CeleryTaskQueue:
             await asyncio.wait_for(asyncio.to_thread(enqueue_embed_cv, user_id), self._call_timeout)
         except (KombuError, RedisError, TimeoutError) as error:
             raise QueueUnavailableError("The embedding queue is unavailable") from error
+
+    async def enqueue_match_scoring(self, user_id: uuid.UUID) -> None:
+        """Ask for a scoring run of the user's matches. A burst of calls becomes one task."""
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(publish_match_scoring, user_id), self._call_timeout
+            )
+        except (KombuError, RedisError, TimeoutError) as error:
+            raise QueueUnavailableError("The scoring queue is unavailable") from error
 
     async def enqueue_extraction(self, job_id: uuid.UUID, countdown: float = 0.0) -> None:
         try:

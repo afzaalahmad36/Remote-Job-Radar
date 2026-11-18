@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from app.api_deps import (
     CurrentUserDep,
     CvEmbeddingQueueDep,
+    MatchQueueDep,
     SessionDep,
     SettingsDep,
     rate_limit_cv,
@@ -18,7 +19,7 @@ from app.schemas.cv import (
     SenioritySuggestionOut,
     YearsSuggestionOut,
 )
-from app.services import cv_service
+from app.services import cv_service, match_status_service
 from app.services.cv_service import CvLimits, SkillsView
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ async def put_cv(
     session: SessionDep,
     settings: SettingsDep,
     embedding_queue: CvEmbeddingQueueDep,
+    match_queue: MatchQueueDep,
 ) -> CvRead:
     """Upload (or replace) your CV: send the PDF or plain text itself as the request body, with
     `Content-Type: application/pdf` or `text/plain`. Only the text is kept, with emails, phone
@@ -81,6 +83,10 @@ async def put_cv(
         await embedding_queue.enqueue_cv_embedding(user.id)
     except QueueUnavailableError:
         logger.warning("The CV of user %s was not queued for embedding; the sweep will", user.id)
+    if settings.embedding_provider == "none":
+        # Nothing will be embedded, so nothing else will ask for scoring: ask now (skills
+        # only). With embeddings on, the embedding task asks when the vector is stored.
+        await match_status_service.publish_request(match_queue, user.id)
     return CvRead.model_validate(cv)
 
 
@@ -90,9 +96,12 @@ async def get_cv(user: CurrentUserDep, session: SessionDep) -> CvRead:
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_cv(user: CurrentUserDep, session: SessionDep) -> Response:
-    """Delete your CV (its text included) permanently."""
+async def delete_cv(
+    user: CurrentUserDep, session: SessionDep, match_queue: MatchQueueDep
+) -> Response:
+    """Delete your CV (its text included) permanently, and the matches ranked against it."""
     await cv_service.delete_cv(session, user.id)
+    await match_status_service.publish_request(match_queue, user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -123,8 +132,11 @@ async def get_skills(user: CurrentUserDep, session: SessionDep) -> CvSkillsRead:
 
 @router.put("/skills")
 async def put_skills(
-    body: CvSkillsWrite, user: CurrentUserDep, session: SessionDep
+    body: CvSkillsWrite, user: CurrentUserDep, session: SessionDep, match_queue: MatchQueueDep
 ) -> CvSkillsRead:
     """Replace your skills with this list. Names the dictionary knows are spelled its way.
-    Uploading a new CV later discards this list and reads the skills from the new text."""
-    return _skills_read(await cv_service.save_skills(session, user.id, body.skills))
+    Uploading a new CV later discards this list and reads the skills from the new text.
+    Your matches are scored again in the background."""
+    view = await cv_service.save_skills(session, user.id, body.skills)
+    await match_status_service.publish_request(match_queue, user.id)
+    return _skills_read(view)

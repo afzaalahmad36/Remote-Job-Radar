@@ -33,6 +33,8 @@ EXPECTED_TASKS = {
     "embed_job",
     "embed_cv",
     "sweep_embeddings",
+    "score_user_matches",
+    "sweep_matches",
 }
 
 
@@ -168,7 +170,7 @@ def test_the_api_deadline_for_one_queue_call_is_a_few_seconds() -> None:
 # --- the beat schedule ---------------------------------------------------------------------------
 
 
-def test_the_schedule_has_the_four_jobs_with_their_task_names() -> None:
+def test_the_schedule_has_the_five_jobs_with_their_task_names() -> None:
     entries = build_config(settings_with())["beat_schedule"]
 
     assert set(entries) == {
@@ -176,11 +178,13 @@ def test_the_schedule_has_the_four_jobs_with_their_task_names() -> None:
         "purge-expired-refresh-tokens",
         "sweep-extraction",
         "sweep-embeddings",
+        "sweep-matches",
     }
     assert entries["ingest-all-active-sources"]["task"] == "ingest_all_active_sources"
     assert entries["purge-expired-refresh-tokens"]["task"] == "purge_expired_refresh_tokens"
     assert entries["sweep-extraction"]["task"] == "sweep_extraction"
     assert entries["sweep-embeddings"]["task"] == "sweep_embeddings"
+    assert entries["sweep-matches"]["task"] == "sweep_matches"
 
 
 def test_the_extraction_sweep_runs_every_five_minutes_whatever_the_settings() -> None:

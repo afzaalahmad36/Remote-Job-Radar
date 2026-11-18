@@ -11,6 +11,7 @@ from sqlalchemy.pool import NullPool
 from app.api_deps import (
     get_cv_embedding_queue,
     get_extraction_queue,
+    get_match_queue,
     get_resolver,
     get_task_queue,
 )
@@ -23,7 +24,13 @@ from app.models import SourceType
 from tests import network_guard
 from tests.db_utils import UnsafeDatabaseError, alembic_config, get_test_database_url
 from tests.extraction_helpers import factory  # noqa: F401  (fixture)
-from tests.fakes import UNREACHABLE_REDIS_URL, FakeFeedServer, FakeResolver, FakeTaskQueue
+from tests.fakes import (
+    UNREACHABLE_REDIS_URL,
+    FakeFeedServer,
+    FakeResolver,
+    FakeTaskQueue,
+    ScoringRequests,
+)
 from tests.task_helpers import celery_env, seed  # noqa: F401  (fixtures, registered for all tests)
 
 
@@ -95,6 +102,21 @@ def task_queue() -> FakeTaskQueue:
     return FakeTaskQueue()
 
 
+@pytest.fixture(autouse=True)
+def scoring_requests(monkeypatch: pytest.MonkeyPatch) -> ScoringRequests:
+    """The embed and extract tasks ask for a re-score when they finish; in tests that only call
+    those tasks, the request is recorded here instead of touching the database or a broker."""
+    requests = ScoringRequests()
+    monkeypatch.setattr("app.tasks.jobs.request_scoring_after_extraction", requests.on_extraction)
+    monkeypatch.setattr(
+        "app.tasks.embedding.request_scoring_after_job_embedding", requests.on_job_embedding
+    )
+    monkeypatch.setattr(
+        "app.tasks.embedding.request_scoring_after_cv_embedding", requests.on_cv_embedding
+    )
+    return requests
+
+
 @pytest.fixture
 def app(settings: Settings, resolver: FakeResolver, task_queue: FakeTaskQueue) -> FastAPI:
     app = create_app(settings)
@@ -103,6 +125,7 @@ def app(settings: Settings, resolver: FakeResolver, task_queue: FakeTaskQueue) -
     app.dependency_overrides[get_task_queue] = lambda: task_queue
     app.dependency_overrides[get_extraction_queue] = lambda: task_queue
     app.dependency_overrides[get_cv_embedding_queue] = lambda: task_queue
+    app.dependency_overrides[get_match_queue] = lambda: task_queue
     return app
 
 

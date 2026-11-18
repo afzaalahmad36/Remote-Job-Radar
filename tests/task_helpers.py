@@ -39,6 +39,10 @@ class Seeder:
 
         return asyncio.run(go())
 
+    def run(self, work: Callable[[AsyncSession], Awaitable[Any]]) -> Any:
+        """Run `work(session)` in its own session and loop; `work` commits what is to be kept."""
+        return self._run(work)
+
     def user(self) -> uuid.UUID:
         async def work(session: AsyncSession) -> uuid.UUID:
             user = User(email=f"{uuid.uuid4()}@example.com", hashed_password="x")

@@ -5,7 +5,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.rate_limit import RateLimiter
-from app.routers import auth, cv, health, jobs, preferences, sources, users
+from app.routers import auth, cv, health, jobs, matches, preferences, sources, users
 
 API_V1_PREFIX = "/api/v1"
 
@@ -43,6 +43,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.extract_rate_limiter = RateLimiter(
         settings.sync_rate_limit_attempts, settings.sync_rate_limit_window_seconds
     )
+    # Manual re-scores: the same numbers as a sync, a bucket of their own.
+    app.state.rescore_rate_limiter = RateLimiter(
+        settings.sync_rate_limit_attempts, settings.sync_rate_limit_window_seconds
+    )
     # CV uploads: their own bucket, counted per user.
     app.state.cv_rate_limiter = RateLimiter(
         settings.cv_rate_limit_attempts, settings.cv_rate_limit_window_seconds
@@ -54,4 +58,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs.router, prefix=API_V1_PREFIX)
     app.include_router(cv.router, prefix=API_V1_PREFIX)
     app.include_router(preferences.router, prefix=API_V1_PREFIX)
+    app.include_router(matches.router, prefix=API_V1_PREFIX)
     return app
