@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cv.text import clean_cv_text, mask_cv_text
 from app.models import JobPreferences
 from app.schemas.preferences import PreferencesWrite
+from app.services import match_status_service
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ async def save_preferences(
         .execution_options(populate_existing=True)
     )
     saved = await session.scalar(statement)
+    await match_status_service.request_scoring(session, user_id, reset_failures=True)
     await session.commit()
     assert saved is not None  # RETURNING always yields the inserted or updated row
     logger.info("Preferences saved: user=%s", user_id)  # never the notes

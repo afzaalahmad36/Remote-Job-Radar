@@ -10,6 +10,7 @@ the preferences are read without `notes`. A test inspects the compiled statement
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, null, select
@@ -38,6 +39,9 @@ class CvRow:
     vector: list[float] | None
     embedding_model: str | None
     embedding_text_hash: str | None
+    # Timestamps only: they tell the write step whether the CV changed while scoring ran.
+    updated_at: datetime
+    embedded_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,21 @@ class PreferenceRow:
     min_salary: int | None
     salary_currency: str | None
     salary_period: SalaryPeriod | None
+    updated_at: datetime  # tells the write step whether the preferences changed meanwhile
+
+
+@dataclass(frozen=True)
+class InputsToken:
+    """Which version of the CV and the preferences a run read, as timestamps and a vector hash.
+
+    Read again under a lock just before writing: any difference means the user changed something
+    while the scores were computed, and the run writes nothing.
+    """
+
+    cv_updated_at: datetime | None
+    cv_embedded_at: datetime | None
+    cv_text_hash: str | None
+    preferences_updated_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -75,15 +94,27 @@ async def load_cv_row(session: AsyncSession, user_id: uuid.UUID) -> CvRow | None
     """The user's CV skills and vector identity, or None when there is no CV."""
     row = (
         await session.execute(
-            select(Cv.skills, Cv.embedding, Cv.embedding_model, Cv.embedding_text_hash).where(
-                Cv.user_id == user_id
-            )
+            select(
+                Cv.skills,
+                Cv.embedding,
+                Cv.embedding_model,
+                Cv.embedding_text_hash,
+                Cv.updated_at,
+                Cv.embedded_at,
+            ).where(Cv.user_id == user_id)
         )
     ).one_or_none()
     if row is None:
         return None
     vector = None if row.embedding is None else [float(x) for x in row.embedding]
-    return CvRow(list(row.skills), vector, row.embedding_model, row.embedding_text_hash)
+    return CvRow(
+        list(row.skills),
+        vector,
+        row.embedding_model,
+        row.embedding_text_hash,
+        row.updated_at,
+        row.embedded_at,
+    )
 
 
 async def load_preference_row(session: AsyncSession, user_id: uuid.UUID) -> PreferenceRow | None:
@@ -96,6 +127,7 @@ async def load_preference_row(session: AsyncSession, user_id: uuid.UUID) -> Pref
                 JobPreferences.min_salary,
                 JobPreferences.salary_currency,
                 JobPreferences.salary_period,
+                JobPreferences.updated_at,
             ).where(JobPreferences.user_id == user_id)
         )
     ).one_or_none()
@@ -107,6 +139,44 @@ async def load_preference_row(session: AsyncSession, user_id: uuid.UUID) -> Pref
         row.min_salary,
         row.salary_currency,
         row.salary_period,
+        row.updated_at,
+    )
+
+
+def token_of(cv: CvRow | None, preferences: PreferenceRow | None) -> InputsToken:
+    """The token of what a run read."""
+    return InputsToken(
+        cv_updated_at=cv.updated_at if cv else None,
+        cv_embedded_at=cv.embedded_at if cv else None,
+        cv_text_hash=cv.embedding_text_hash if cv else None,
+        preferences_updated_at=preferences.updated_at if preferences else None,
+    )
+
+
+async def lock_inputs(session: AsyncSession, user_id: uuid.UUID) -> InputsToken:
+    """Read the token again and lock the CV and preferences rows against changes (FOR SHARE).
+
+    Anyone who wants to change either row (a new upload, saved skills or preferences, the
+    embedding of the CV) waits until this transaction ends, which is a few statements away: the
+    scores were already computed. Only the token's columns are selected, never the text.
+    """
+    cv = (
+        await session.execute(
+            select(Cv.updated_at, Cv.embedded_at, Cv.embedding_text_hash)
+            .where(Cv.user_id == user_id)
+            .with_for_update(read=True)
+        )
+    ).one_or_none()
+    preferences_updated_at = await session.scalar(
+        select(JobPreferences.updated_at)
+        .where(JobPreferences.user_id == user_id)
+        .with_for_update(read=True)
+    )
+    return InputsToken(
+        cv_updated_at=cv.updated_at if cv else None,
+        cv_embedded_at=cv.embedded_at if cv else None,
+        cv_text_hash=cv.embedding_text_hash if cv else None,
+        preferences_updated_at=preferences_updated_at,
     )
 
 
@@ -233,6 +303,100 @@ async def delete_matches(
         await session.execute(
             delete(JobMatch).where(JobMatch.user_id == user_id, JobMatch.job_id.in_(job_ids))
         )
+
+
+async def delete_matches_outside(
+    session: AsyncSession, user_id: uuid.UUID, keep_job_ids: list[uuid.UUID]
+) -> int:
+    """Remove this user's matches for every job NOT in `keep_job_ids`; returns how many.
+
+    Only for a complete run: those rows were scored for an earlier CV or earlier jobs and no
+    longer say anything about the current candidates.
+    """
+    result = await session.execute(
+        delete(JobMatch)
+        .where(JobMatch.user_id == user_id, JobMatch.job_id.not_in(keep_job_ids))
+        .returning(JobMatch.job_id)
+    )
+    return len(result.all())
+
+
+async def delete_all_matches(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Remove every match of this user (their CV was deleted: there is nothing to rank against)."""
+    await session.execute(delete(JobMatch).where(JobMatch.user_id == user_id))
+
+
+def _visible_conditions(
+    user_id: uuid.UUID, include_filtered: bool, min_score: int | None, source_id: uuid.UUID | None
+) -> list[Any]:
+    """The WHERE conditions of the listing: this user's matches of jobs they still have."""
+    conditions: list[Any] = [
+        JobMatch.user_id == user_id,
+        Source.user_id == user_id,
+        Job.extraction_status == ExtractionStatus.EXTRACTED,
+    ]
+    if not include_filtered:
+        conditions.append(JobMatch.filters_failed.is_(False))
+    if min_score is not None:
+        conditions.append(JobMatch.score >= min_score)
+    if source_id is not None:
+        conditions.append(Source.id == source_id)
+    return conditions
+
+
+async def page_matches(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    include_filtered: bool,
+    min_score: int | None,
+    source_id: uuid.UUID | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[tuple[JobMatch, Job]], int]:
+    """One page of the ranked list with its jobs, and how many rows match in all.
+
+    Best score first, then the newest job. A `source_id` that is not the user's gives an empty
+    page: the join on `sources.user_id` cannot reach another user's source.
+    """
+    conditions = _visible_conditions(user_id, include_filtered, min_score, source_id)
+    rows = await session.execute(
+        select(JobMatch, Job)
+        .join(Job, Job.id == JobMatch.job_id)
+        .join(Source, Source.id == Job.source_id)
+        .where(*conditions)
+        .order_by(JobMatch.score.desc(), Job.created_at.desc(), JobMatch.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    total = await session.scalar(
+        select(func.count())
+        .select_from(JobMatch)
+        .join(Job, Job.id == JobMatch.job_id)
+        .join(Source, Source.id == Job.source_id)
+        .where(*conditions)
+    )
+    return [(match, job) for match, job in rows.all()], int(total or 0)
+
+
+async def get_match_with_job(
+    session: AsyncSession, user_id: uuid.UUID, job_id: uuid.UUID
+) -> tuple[JobMatch, Job] | None:
+    """This user's match and its job, or None (also for a job that belongs to someone else)."""
+    row = (
+        await session.execute(
+            select(JobMatch, Job)
+            .join(Job, Job.id == JobMatch.job_id)
+            .join(Source, Source.id == Job.source_id)
+            .where(
+                JobMatch.user_id == user_id,
+                JobMatch.job_id == job_id,
+                Source.user_id == user_id,
+                Job.extraction_status == ExtractionStatus.EXTRACTED,
+            )
+        )
+    ).one_or_none()
+    return None if row is None else (row[0], row[1])
 
 
 async def list_matches(
