@@ -2,7 +2,7 @@
 
 The calibration section (section 2) was written **before** any scoring code or test existed, so the
 floor and the ceiling cannot have been tuned to a result. This file describes the scorer built in
-Phase 4, PR 4.
+Phase 4, PR 4, and how its results are kept fresh and served (section 9, PR 5).
 
 No LLM is used anywhere in scoring: the CV must never reach a hosted provider, and nothing here
 needs a model that runs at request time (the vectors are stored by the embedding worker, PR 3).
@@ -315,4 +315,127 @@ A CV without a usable vector scores the newest `MATCH_CANDIDATES` jobs on skills
   the CV or the jobs change enough to bring it in.
 - A stale match row stays until its job is re-scored, becomes unscorable (the row is removed) or the
   job is deleted; the list only returns matches of jobs that are still extracted.
-- Nothing runs the scorer by itself yet: the Celery task, the triggers and the endpoints are PR 5.
+- A request is stored in the database before anything is published, so a lost message is recovered by
+  the sweep. A request that was never recorded (the database was down for every retry of an
+  `embed_job` task after its vector was committed) is found by the sweep's fourth step: an up-to-date
+  user with a job embedded after their last run finished. That step looks at each up-to-date user's
+  jobs once per pass without an index on `jobs.embedded_at`; add one if the table grows large. An
+  embedding that was merely re-checked also refreshes `embedded_at`, which can cause one cheap extra
+  run (unchanged scores are not rewritten).
+- Scores are a few seconds to a few minutes behind a change (a 5-second publish delay, then the
+  queue); `scoring` in the API says so. A deployment with several API processes still has the
+  per-process rate limiter (see CLAUDE.md), including the one on `POST /matches/rescore`.
+
+## 9. Keeping matches fresh (Phase 4, PR 5)
+
+Scores are computed in the background, stored, and only read by the API. Reading never recomputes.
+
+### The request is stored first
+
+`match_status` holds one row per user: `requested_seq`, `finished_seq`, timestamps, a failure count and
+the fingerprint (scorer version plus settings) of the last finished run. It holds counters, timestamps
+and fixed codes only: no CV text, no skills, no notes.
+
+Anything that makes a user's matches stale raises `requested_seq` **in the same transaction as the
+change itself**, so the change and the request land together, and a lost Celery message or a Redis
+outage cannot lose the request. A run reads `requested_seq` when it starts and, when it finishes,
+sets `finished_seq` to that number. A change that arrives during the run raised `requested_seq` past
+it, so the user is still *pending* after the run ends (counters, not clocks, decide this: two
+statements of one transaction can carry the same clock reading). Redis only delays and coalesces
+messages; this row is the truth.
+
+| What changed | Request raised by | Task published by |
+|---|---|---|
+| `PUT /cv` (new CV) | the upload's transaction (clears failures) | `embed_cv` when it stores the vector; the endpoint itself when `EMBEDDING_PROVIDER=none` |
+| `PUT /cv/skills`, `PUT /preferences` | the same transaction (clears failures) | the endpoint, after the commit |
+| `DELETE /cv` | the same transaction; the user's matches are deleted in it too | the endpoint (the run finds no CV and settles) |
+| a job was embedded (`embed_job`) | the task, for the job's owner | the task |
+| a job was extracted, with embeddings off | the `extract_job` task, for the owner | the task |
+| `POST /matches/rescore` | the endpoint (clears failures) | the endpoint, before the commit |
+| settings or `SCORER_VERSION` changed | the sweep (see below) | the sweep |
+
+The scoring task is `score_user_matches(user_id)` on the main `celery` queue: it reads stored vectors
+and never loads the embedding model (a test imports the scoring modules in a clean interpreter and
+checks that `fastembed`, `onnxruntime` and `tokenizers` stay unloaded). **Its only argument is the user
+id.** CV text, skills and preference notes are never a task argument, a Redis key or a Redis value:
+the dedup key is `match:queued:<user id>` holding `1`, the run lock is `lock:match:<user id>`.
+
+### Coalescing
+
+A publish waits 5 seconds (so the change commits first) and is dropped when one was published for the
+same user in the last few seconds (`SET key 1 NX EX`). A burst of 100 embedded jobs or five quick CV
+edits is one task, and that task reads the latest data whenever it runs. A run that ends with a request
+still open (a change arrived meanwhile, or its inputs changed while it ran) publishes one follow-up
+itself, so nothing waits for the sweep.
+
+### The run, and what makes it safe
+
+1. `begin_run` is one UPDATE that refuses while another run is in progress (started less than 5
+   minutes ago), so two runs of one user cannot overlap even if the Redis lock was lost. It returns
+   the request number the run will satisfy.
+2. Read the CV skills, vector, preferences and the nearest candidates, and **end that transaction**.
+3. Compute the scores: pure CPU, nothing locked, no transaction open.
+4. One short write transaction: lock the CV and preferences rows (`FOR SHARE`), read their
+   timestamps again, and compare them with what step 2 read. If either changed, **write nothing**,
+   clear the run and stay pending (the change already requested another run). Otherwise upsert the
+   changed matches, delete matches that can no longer be scored, record the finish, and commit. The
+   locked part is a handful of statements (a test records them and checks that every candidate read
+   and every score came before the first lock, and that none came after).
+5. After a **complete** run (all of the user's candidates, inputs unchanged, a ticket from the status
+   table, at least one candidate) the user's matches for jobs that are no longer candidates are deleted:
+   they were scored for an earlier CV or earlier jobs. A skipped or aborted run deletes nothing, and
+   neither does a run with no candidates (that usually means the jobs have no vector of the current
+   model yet, not that the old matches are wrong).
+
+Job rows are not locked: a job that changes mid-run raised its own request, so the next run fixes it
+(eventual consistency, one extra run at most).
+
+### Failures
+
+A database or Redis outage is raised to Celery, which retries (the run is cleared first so the retry
+is not refused as "already running"). Any other exception is a bug: it is counted (`failure_count`,
+code `unexpected_error`; the log has the exception *type* only, because the message and the traceback
+can quote a skill or an explanation). After 3 failures in a row the sweep leaves the user alone and
+the state is `failed`; saving a CV, skills or preferences, or `POST /matches/rescore`, clears the
+count. A job being embedded does not.
+
+### The sweep (`sweep_matches`, beat, every 5 minutes, one pass, no retry loop)
+
+1. A user with a CV and no status row gets a request.
+2. A user who is up to date under a different fingerprint (a setting or the scorer version changed)
+   gets a request: at most 50 per pass, and the publishes are spread over a 60-second window, so a
+   settings change does not queue everybody at once. A user already pending is skipped, so the same
+   users are not picked again next pass.
+3. A user whose request has waited more than 2 minutes with no task is queued, at most **once per 5
+   minutes per user**, never while a run is in progress, never after 3 failures.
+4. An up-to-date user who owns a job whose `embedded_at` is newer than their `finished_at` gets a
+   request and is queued: this recovers a request that was never recorded. Same caps (once per 5
+   minutes per user, never during a run, never after 3 failures), at most 100 users per pass.
+
+If the queue is down the sweep logs one warning and stops; the next pass is the retry.
+
+### What the API returns
+
+`GET /matches` and `GET /matches/{job_id}` return the stored rows and a `scoring` object:
+`up_to_date`, `pending` (a request is open), `running`, `no_cv` or `failed`, with `requested_at`,
+`finished_at`, `failure_count`, `max_attempts` and a fixed `error` code. While a re-score is pending the
+previous scores are returned unchanged, so a client can show them with an "updating" hint. After a new
+CV the old scores stay visible, flagged pending, until the run replaces or removes them. After a
+deleted CV the matches are gone at once and the state is `no_cv`.
+
+`GET /matches` (ranked by score, then the newest job; `min_score`, `include_filtered`, `source_id`,
+`limit` up to 100, `offset`), `GET /matches/status` (cheap, for polling), `GET /matches/{job_id}` (the
+stored explanation exactly as stored, plus one fixed sentence per note; 404 for another user's job, a
+missing job and a job with no match yet, all the same body) and `POST /matches/rescore` (202;
+`queued`, `already_pending` or `already_running`; its own rate-limit bucket, the same numbers as a
+sync; 404 without a CV; 503 and nothing changed if the queue is down). Every response model lists its
+fields explicitly and a test pins the exact key set, so no field that could carry CV text can appear.
+
+### With `EMBEDDING_PROVIDER=none`, scores are skills-only
+
+When embeddings are off nothing is embedded, so no CV or job has a vector and the embedding part has
+nothing to compare. Scoring still works: the skills part gets all the weight (effective weights
+skills 1, embedding 0), a job without a stack is unscorable, and **every explanation says so** with
+the note `no_embedding` ("No comparable embedding: the score is skills only."). Turning embeddings on
+later changes the vector identity inside every `inputs_hash`, so the next run rewrites the matches; no
+manual step is needed.
