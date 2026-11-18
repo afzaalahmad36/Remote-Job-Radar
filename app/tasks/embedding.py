@@ -27,6 +27,10 @@ from app.tasks.celery_app import (
     celery_app,
 )
 from app.tasks.common import ENQUEUE_ERRORS, RETRYABLE_ERRORS, session_factory
+from app.tasks.matching import (
+    request_scoring_after_cv_embedding,
+    request_scoring_after_job_embedding,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +105,11 @@ async def _embed_job(settings: Settings, job_id: uuid.UUID, embedder: Embedder) 
     max_retries=3,
 )
 def embed_job(job_id: str) -> str:
-    """Celery task: compute and store the embedding of one extracted job."""
-    return run_embed_job(uuid.UUID(job_id))
+    """Celery task: compute and store the embedding of one extracted job, then ask for a re-score
+    of its owner's matches (the job's vector or extracted fields may have changed)."""
+    outcome = run_embed_job(uuid.UUID(job_id))
+    request_scoring_after_job_embedding(uuid.UUID(job_id), outcome)
+    return outcome
 
 
 # --- embed the CV ------------------------------------------------------------------------------
@@ -135,8 +142,10 @@ async def _embed_cv(settings: Settings, user_id: uuid.UUID, embedder: Embedder) 
     max_retries=3,
 )
 def embed_cv(user_id: str) -> str:
-    """Celery task: compute and store the embedding of one user's CV."""
-    return run_embed_cv(uuid.UUID(user_id))
+    """Celery task: compute and store the embedding of one user's CV, then ask for a re-score."""
+    outcome = run_embed_cv(uuid.UUID(user_id))
+    request_scoring_after_cv_embedding(uuid.UUID(user_id), outcome)
+    return outcome
 
 
 # --- the sweep ---------------------------------------------------------------------------------

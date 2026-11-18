@@ -47,7 +47,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 # Celery's @task decorator is untyped, so the decorated functions look untyped to mypy. Only the
 # decorator is affected: the functions' own bodies and signatures are still checked strictly.
-module = ["app.tasks.jobs", "app.tasks.embedding"]
+module = ["app.tasks.jobs", "app.tasks.embedding", "app.tasks.matching"]
 disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]

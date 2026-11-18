@@ -57,7 +57,9 @@ def build_config(settings: Settings) -> dict[str, Any]:
         # feed cannot hold up tasks that another process could be running.
         "task_default_queue": DEFAULT_QUEUE,
         # Only the two tasks that run the model go to the embed queue. The embedding sweep only
-        # reads the database and publishes, so the main worker runs it.
+        # reads the database and publishes, so the main worker runs it. Scoring needs no model
+        # (it reads stored vectors), so `score_user_matches` and `sweep_matches` stay on the
+        # default queue and the embedding model is never loaded for them.
         "task_routes": {
             "embed_job": {"queue": EMBED_QUEUE},
             "embed_cv": {"queue": EMBED_QUEUE},
@@ -99,6 +101,11 @@ def build_config(settings: Settings) -> dict[str, Any]:
                 "schedule": float(SWEEP_INTERVAL_SECONDS),
                 "options": {"expires": SWEEP_INTERVAL_SECONDS},
             },
+            "sweep-matches": {
+                "task": "sweep_matches",
+                "schedule": float(SWEEP_INTERVAL_SECONDS),
+                "options": {"expires": SWEEP_INTERVAL_SECONDS},
+            },
             "purge-expired-refresh-tokens": {
                 "task": "purge_expired_refresh_tokens",
                 "schedule": crontab(**PURGE_AT_UTC),
@@ -130,5 +137,7 @@ class _LazyConfig(Mapping[str, Any]):
 
 
 # `include` makes workers import the task module on start-up, which registers the tasks.
-celery_app = Celery("job_radar", include=["app.tasks.jobs", "app.tasks.embedding"])
+celery_app = Celery(
+    "job_radar", include=["app.tasks.jobs", "app.tasks.embedding", "app.tasks.matching"]
+)
 celery_app.config_from_object(_LazyConfig())

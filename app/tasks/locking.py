@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 LOCK_KEY_PREFIX = "lock:ingest:"
 JOB_LOCK_KEY_PREFIX = "lock:extract:"
+MATCH_LOCK_KEY_PREFIX = "lock:match:"
 # Longer than the hard time limit: a task that is still running is always killed before its lock
 # can expire, so a live run never loses its lock. The extra 30 s is margin for clock/scheduling.
 LOCK_TTL_SECONDS = HARD_TIME_LIMIT_SECONDS + 30
@@ -109,6 +110,24 @@ class RedisJobLocks(RedisSourceLocks):
 
     _prefix = JOB_LOCK_KEY_PREFIX
     _ttl = JOB_LOCK_TTL_SECONDS
+
+
+class RedisMatchLocks(RedisSourceLocks):
+    """One lock per user, so two scoring runs of one user's matches do not overlap.
+
+    Only an optimisation, like the job locks: the database refuses a second run while one is in
+    progress (`match_status_service.begin_run`), and every write is checked against the inputs.
+    The TTL outlives the hard task limit.
+    """
+
+    _prefix = MATCH_LOCK_KEY_PREFIX
+    _ttl = LOCK_TTL_SECONDS
+
+
+@lru_cache
+def redis_match_locks_for(redis_url: str) -> RedisMatchLocks:
+    """One scoring-lock client per process, like `redis_locks_for`."""
+    return RedisMatchLocks.from_url(redis_url)
 
 
 @lru_cache
