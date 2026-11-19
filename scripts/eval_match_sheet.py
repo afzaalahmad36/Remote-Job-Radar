@@ -46,13 +46,16 @@ from app.services.match_service import scoring_config
 from scripts.calibrate_similarity import cv_vector
 from scripts.db_guard import ScriptError, database_target, ensure_jobs_table, read_only_engine
 from scripts.match_eval import (
+    DEFAULT_PERSONAS,
     DEFAULT_SEED,
+    LOCAL_DIR,
     PROTOCOL_POOL_SIZE,
     SHEET_TEXT_CHARS,
     Persona,
     PersonaPlan,
     PersonaSpec,
     PoolJob,
+    check_out_dir,
     check_pool,
     describe,
     key_document,
@@ -61,8 +64,6 @@ from scripts.match_eval import (
     sheet_document,
 )
 
-DEFAULT_PERSONAS = Path("tests/fixtures/cv/personas.toml")
-LOCAL_DIR = Path(".local")  # the git-ignored folder: the only place a real CV may be named
 DEFAULT_OUT = LOCAL_DIR / "match_eval"
 
 
@@ -190,12 +191,6 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--allow-provider", action="store_true", help="refused: no provider is used"
     )
     return parser.parse_args(argv)
-
-
-def check_out_dir(out: Path, local_root: Path = LOCAL_DIR) -> None:
-    """Sheets, key and labels name jobs and show post text: they stay in the git-ignored folder."""
-    if not out.resolve().is_relative_to(local_root.resolve()):
-        raise ScriptError("--out must be inside .local/ (it is git-ignored)")
 
 
 async def run(args: argparse.Namespace) -> int:

@@ -63,9 +63,23 @@ SEEN_EXAMPLES: Mapping[str, Mapping[str, str]] = {
     "jordan": {"14a2b4d7": "relevant", "7b9c2242": "maybe", "0922063b": "no"},
 }
 
+LOCAL_DIR = Path(".local")  # the git-ignored folder: the only place a real CV may be named
+DEFAULT_PERSONAS = Path("tests/fixtures/cv/personas.toml")
+
 _NAME = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")  # becomes a file name: nothing else is allowed
 
 PersonaKind = Literal["synthetic", "real"]
+
+
+def check_out_dir(out: Path, local_root: Path = LOCAL_DIR) -> None:
+    """Sheets, key and labels name jobs and show post text: they stay in the git-ignored folder."""
+    if not out.resolve().is_relative_to(local_root.resolve()):
+        raise ScriptError("--out must be inside .local/ (it is git-ignored)")
+
+
+def valid_persona_name(name: str) -> bool:
+    """Persona names become file names, so only a short, plain name is allowed."""
+    return _NAME.match(name) is not None
 
 
 @dataclass(frozen=True)

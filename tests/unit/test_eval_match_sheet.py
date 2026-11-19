@@ -452,9 +452,9 @@ def test_the_output_directory_must_be_inside_local(tmp_path: Path) -> None:
     local = tmp_path / ".local"
     local.mkdir()
 
-    sheet.check_out_dir(local / "match_eval", local)
+    ev.check_out_dir(local / "match_eval", local)
     with pytest.raises(ScriptError, match="inside .local"):
-        sheet.check_out_dir(tmp_path / "out", local)
+        ev.check_out_dir(tmp_path / "out", local)
 
 
 def test_the_real_cv_text_and_skills_appear_in_no_output(
