@@ -468,6 +468,8 @@ def key_document(
             "count": len(pool),
             "hash": pool_hash([j.id for j in pool]),
             "ids": sorted(j.id for j in pool),
+            # Jobs with a stack: the "technical posts" stratum of the protocol's metrics.
+            "technical": sorted(j.id for j in pool if j.stack),
         },
         "personas": personas,
     }

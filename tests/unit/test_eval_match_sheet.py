@@ -283,6 +283,7 @@ def test_the_key_says_where_every_job_stood_and_marks_the_examples() -> None:
     pool_info = key["pool"]
     assert isinstance(pool_info, dict)
     assert pool_info["count"] == len(pool)
+    assert pool_info["technical"] == sorted(j.id for j in pool if j.stack)
     assert key["scorer_version"] == "score_v1"
 
 
