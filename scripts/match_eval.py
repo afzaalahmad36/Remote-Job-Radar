@@ -158,8 +158,19 @@ def _enum_list[E](make: Callable[[str], E], values: object, field: str) -> tuple
         raise ScriptError(f"{field} has a value that is not allowed") from None
 
 
-def load_personas(path: Path) -> list[PersonaSpec]:
-    """Read a persona file (TOML). A CV path is relative to the file. Messages never quote a CV."""
+def _inside(path: Path, root: Path) -> bool:
+    return path.resolve().is_relative_to(root.resolve())
+
+
+def load_personas(path: Path, *, local_root: Path | None = None) -> list[PersonaSpec]:
+    """Read a persona file (TOML). A CV path is relative to the file. Messages never quote a CV.
+
+    Without `local_root` every persona is synthetic (a "real" kind is refused: an owner's CV must
+    not be named in a file that could be committed). With `local_root` (the git-ignored `.local/`),
+    both the file and every CV it names must lie inside it, and every persona is a real one.
+    """
+    if local_root is not None and not _inside(path, local_root):
+        raise ScriptError("a real-CV persona file must be inside .local/")
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
@@ -167,29 +178,30 @@ def load_personas(path: Path) -> list[PersonaSpec]:
     entries = data.get("persona")
     if not isinstance(entries, list) or not entries:
         raise ScriptError(f"{path.name} has no [[persona]] entry")
-    specs: list[PersonaSpec] = []
-    for entry in entries:
-        specs.append(_load_one(entry, path.parent))
+    specs = [_load_one(entry, path.parent, local_root) for entry in entries]
     names = [s.name for s in specs]
     if len(set(names)) != len(names):
         raise ScriptError("persona names must be unique")
     return specs
 
 
-def _load_one(entry: object, base: Path) -> PersonaSpec:
+def _load_one(entry: object, base: Path, local_root: Path | None) -> PersonaSpec:
     if not isinstance(entry, dict):
         raise ScriptError("a persona entry must be a table")
     name = entry.get("name")
     if not isinstance(name, str) or not _NAME.match(name):
         raise ScriptError("a persona name must be lower case letters, digits, - or _")
-    kind = entry.get("kind", "synthetic")
-    if kind not in ("synthetic", "real"):
-        raise ScriptError(f"persona {name}: kind must be synthetic or real")
+    kind: PersonaKind = "synthetic" if local_root is None else "real"
+    if entry.get("kind", kind) != kind:
+        raise ScriptError(f"persona {name}: kind must be {kind} in this file")
     cv_file = entry.get("cv")
     if not isinstance(cv_file, str):
         raise ScriptError(f"persona {name}: cv must be a file name")
+    cv_path = base / cv_file
+    if local_root is not None and not _inside(cv_path, local_root):
+        raise ScriptError(f"persona {name}: the CV file must be inside .local/")
     try:
-        cv_text = (base / cv_file).read_text(encoding="utf-8")
+        cv_text = cv_path.read_text(encoding="utf-8")
     except OSError:
         raise ScriptError(f"persona {name}: cannot read the CV file") from None
     return PersonaSpec(name, kind, cv_text, _preferences(name, entry))

@@ -400,3 +400,86 @@ def test_a_persona_is_prepared_from_masked_text_and_keeps_no_cv_text() -> None:
 def test_the_evaluation_code_reaches_no_llm_and_no_http_client() -> None:
     for name in ("match_eval.py", "eval_match_sheet.py", "calibrate_similarity.py"):
         assert forbidden_imports(ROOT / "app", ROOT / "scripts" / name) == []
+
+
+# --- a real CV: only under .local/, and never in any output --------------------------------------
+
+
+def real_file(root: Path, cv_name: str = "real_cv.txt", cv_text: str = "Skills: Elixir") -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / cv_name).write_text(cv_text, encoding="utf-8")
+    path = root / "real.toml"
+    path.write_text(f'[[persona]]\nname = "me"\ncv = "{cv_name}"\n', encoding="utf-8")
+    return path
+
+
+def test_a_real_persona_file_outside_local_is_refused(tmp_path: Path) -> None:
+    local = tmp_path / ".local"
+    local.mkdir()
+    outside = real_file(tmp_path / "elsewhere")
+
+    with pytest.raises(ScriptError, match="inside .local"):
+        ev.load_personas(outside, local_root=local)
+
+
+def test_a_real_persona_file_may_not_name_a_cv_outside_local(tmp_path: Path) -> None:
+    local = tmp_path / ".local"
+    local.mkdir()
+    (tmp_path / "outside.txt").write_text("Skills: Python", encoding="utf-8")
+    path = local / "real.toml"
+    path.write_text('[[persona]]\nname = "me"\ncv = "../outside.txt"\n', encoding="utf-8")
+
+    with pytest.raises(ScriptError, match="CV file must be inside .local"):
+        ev.load_personas(path, local_root=local)
+
+
+def test_a_real_persona_inside_local_is_read_and_is_a_real_kind(tmp_path: Path) -> None:
+    local = tmp_path / ".local"
+
+    (spec,) = ev.load_personas(real_file(local / "cv"), local_root=local)
+
+    assert spec.kind == "real" and spec.name == "me"
+
+
+def test_a_real_kind_is_refused_in_the_ordinary_persona_file(tmp_path: Path) -> None:
+    path = write_personas(tmp_path, '[[persona]]\nname = "a"\ncv = "cv.txt"\nkind = "real"\n')
+
+    with pytest.raises(ScriptError, match="kind must be synthetic"):
+        ev.load_personas(path)
+
+
+def test_the_output_directory_must_be_inside_local(tmp_path: Path) -> None:
+    local = tmp_path / ".local"
+    local.mkdir()
+
+    sheet.check_out_dir(local / "match_eval", local)
+    with pytest.raises(ScriptError, match="inside .local"):
+        sheet.check_out_dir(tmp_path / "out", local)
+
+
+def test_the_real_cv_text_and_skills_appear_in_no_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    canary = "CANARYREALCV9137"
+    cv_text = f"Skills: Elixir, Python\nLine that must stay private: {canary}\n"
+    local = tmp_path / ".local"
+    (spec,) = ev.load_personas(real_file(local, cv_text=cv_text), local_root=local)
+    synthetic = [
+        ev.PersonaSpec("alex", "synthetic", "Skills: Python, SQL", PreferenceFacts()),
+        ev.PersonaSpec("sam", "synthetic", "Skills: React, TypeScript", PreferenceFacts()),
+    ]
+    pool = make_pool()
+
+    personas = sheet.prepare_personas([*synthetic, spec], EMBEDDER)
+    plans = ev.plan_all(personas, pool, CONFIG, seed=1)
+    for line in ev.describe(plans, pool):
+        print(line)
+    written = sheet.write_outputs(local / "match_eval", plans, pool, CONFIG, seed=1)
+
+    shown = capsys.readouterr().out
+    stored = "".join(path.read_text(encoding="utf-8") for path in written)
+    for output in (shown, stored):
+        assert canary not in output
+        assert "Elixir" not in output
+        assert "Line that must stay private" not in output
+    assert "me (real)" in shown

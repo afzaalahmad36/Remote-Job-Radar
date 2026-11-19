@@ -62,7 +62,8 @@ from scripts.match_eval import (
 )
 
 DEFAULT_PERSONAS = Path("tests/fixtures/cv/personas.toml")
-DEFAULT_OUT = Path(".local/match_eval")
+LOCAL_DIR = Path(".local")  # the git-ignored folder: the only place a real CV may be named
+DEFAULT_OUT = LOCAL_DIR / "match_eval"
 
 
 async def read_pool(settings: Settings) -> list[PoolJob]:
@@ -191,16 +192,26 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def check_out_dir(out: Path, local_root: Path = LOCAL_DIR) -> None:
+    """Sheets, key and labels name jobs and show post text: they stay in the git-ignored folder."""
+    if not out.resolve().is_relative_to(local_root.resolve()):
+        raise ScriptError("--out must be inside .local/ (it is git-ignored)")
+
+
 async def run(args: argparse.Namespace) -> int:
     if args.allow_provider:
         raise ScriptError("this script never asks a provider; --allow-provider is refused")
+    check_out_dir(args.out)
     settings = get_settings()
     if settings.embedding_provider != "fastembed":
         raise ScriptError("needs the real model: set EMBEDDING_PROVIDER=fastembed (Docker image)")
     print(f"database: {database_target(settings.database_url)} (read-only)")
     specs = load_personas(args.personas)
     if args.real_personas is not None:
-        specs += load_personas(args.real_personas)
+        specs += load_personas(args.real_personas, local_root=LOCAL_DIR)
+        names = [spec.name for spec in specs]
+        if len(set(names)) != len(names):
+            raise ScriptError("persona names must be unique across both files")
     pool = await read_pool(settings)
     print(f"pool read: {len(pool)} jobs (the protocol froze {PROTOCOL_POOL_SIZE})")
     embedder = build_embedder(settings)

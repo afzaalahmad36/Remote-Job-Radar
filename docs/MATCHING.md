@@ -748,7 +748,10 @@ by CI or app code. The sheet script reads the database read-only, refuses a data
 `jobradar`, builds no LLM client and refuses `--allow-provider`. The scoring script needs no database,
 model or provider: it reads the pool snapshot, the key and the label files. It prints counts and
 opaque numbers only, never CV text, skills or notes, and writes a run record (constants, versions,
-file hashes, counts) under `.local/match_eval/runs/`.
+file hashes, counts) under `.local/match_eval/runs/`. The owner's own CV is named only in a persona file
+inside `.local/` (`--real-personas`; the file, the CV it names and `--out` must all lie inside
+`.local/`, and the script refuses anything else); its text and skills appear in no printed line, sheet,
+key or run record, and a test checks that.
 
 ### Limits of this evaluation
 
