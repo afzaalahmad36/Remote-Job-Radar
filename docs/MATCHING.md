@@ -439,3 +439,331 @@ skills 1, embedding 0), a job without a stack is unscorable, and **every explana
 the note `no_embedding` ("No comparable embedding: the score is skills only."). Turning embeddings on
 later changes the vector identity inside every `inputs_hash`, so the next run rewrites the matches; no
 manual step is needed.
+
+## 10. Evaluation protocol (Phase 4, PR 6)
+
+This section is written and committed **before any sheet is built and before any label exists**.
+Nothing below may change after the first label is written; if something must change, the evaluation
+is restarted and the reason is recorded here. The evaluation measures one thing: for a given CV and
+its preferences, does the scorer put jobs the person would apply to near the top of their list.
+
+### Personas
+
+| Persona | Profile (the CV is written from this) | Preferences |
+|---|---|---|
+| Alex | Backend: Python, FastAPI, PostgreSQL, Docker (exists: `tests/fixtures/cv/alex_example.txt`) | senior or lead, remote, at least 100,000 USD per year |
+| Sam | Frontend: React, TypeScript, Next.js, CSS | junior or mid, remote, no salary |
+| Jordan | Data and ML: Python, SQL, pandas, Airflow, AWS | senior, remote, no salary |
+
+Sam's and Jordan's CVs are invented, committed under `tests/fixtures/cv/`, and written from the
+profiles in this table only. Disclosure: the profiles were fixed in the plan before this section, but
+while choosing the worked examples below the author read the titles, seniority, remote policy and
+stack of the stored jobs (no scores, no post bodies), so the personas were not chosen blind to the
+general content of the pool.
+
+**The real CV is optional.** It is kept out of the pass rule, never committed, never uploaded to
+anything but the local stack, and held to a final local check after everything else is fixed. It is
+labelled and reported (counts only) only if its owner chooses to run it, with the privacy checklist
+of section 11. Its preferences are written by its owner in `.local/` before labelling.
+
+### The pool
+
+Every stored job that is `extracted`, has a vector of the current embedding model, and has a distinct
+`raw_text_hash` (the same post stored once per source counts once; the lowest id is kept). At the time
+of writing this is 108 distinct texts out of 268 extracted rows (the snapshot below). The pool is **frozen** when the
+sheets are built: the job ids, their count and a hash of the sorted id list are recorded in the answer
+key, and a later run refuses to score if the pool differs. The pool contains jobs outside software
+(sales, operations, design); they are kept, because a real feed contains them, and results are also
+reported for the technical posts alone (jobs with a non-empty stack).
+
+Personas are scored in memory with the pure scorer (`app/matching/scoring.py`). Nothing is uploaded,
+no `job_matches` row is written, no provider is asked, and the database is only read.
+
+### The frozen pool snapshot (recorded before any sheet or label exists)
+
+Recorded on 2026-11-19, read-only, from the development database. The pool is the rows with
+`extraction_status = 'extracted'` and a vector whose `embedding_model` is
+`BAAI/bge-small-en-v1.5@aa8f8b060edb00e03bfdd08813a2949946c8ba55`, one row per `raw_text_hash` (the
+lowest id, compared as text). It has **108** jobs (268 extracted rows in all). Its identity is the
+SHA-256 of the sorted ids joined with a single newline (UTF-8, lower-case hyphenated UUIDs, no
+trailing newline):
+
+`7cd0b36da7ede96de6a8e61396ef0ca969958237bb3c67ba25f42cce0183470c`
+
+The sheet script recomputes this hash from the database and **refuses to build when it differs**, and
+the scoring script refuses a key whose pool hash differs. The ids:
+
+```text
+03005e8e-39a9-45c3-8d95-f59082ccc42d
+06a4a005-6da7-4aa9-a212-f450a1df19e9
+0759c33d-9866-4131-b98a-b7bdc8d0dcf1
+0922063b-859b-41cd-804e-ecb7134224de
+09aa1503-0e75-40bc-8795-cd016ab05498
+09bf389f-d2bd-48ee-938a-241e2f8e1b59
+09d8d8b3-ccb3-47a6-99be-75522f5e5d22
+0c02a211-29b0-48c3-b8cc-e3106ec5dabd
+0d80fc59-100e-48f9-9228-97f9a999054e
+0e083a05-f135-40b8-82b2-7ffcc09b59e0
+0e70dbbc-ca26-4a03-bb12-db14c250fc84
+0f9120f4-2858-4d66-a87b-2fb78c9b8cd5
+12b3bd55-ffa7-4035-af43-3fa2ad171f16
+12f159c0-e2a8-4d01-9b26-61bef4310049
+13585f81-5b37-4feb-ad85-a99c0b6a2034
+144b0542-a984-4b61-bd85-7e158af7a743
+14a2b4d7-c789-4584-a57b-15794c583c7f
+1580df5f-53c7-4f52-9c9e-d43e90d840eb
+16b06b6a-54c2-48ad-80fa-b943f558e47e
+175adf5e-7c4a-4612-9b72-9232da743934
+17f9f5fd-ecbe-445f-ab8e-019b727348c4
+188d6927-04e6-4b18-bd69-b45459b55574
+19ccdaa7-ec7d-46c9-8fb8-80a8b31139b6
+1acb773d-913a-4228-b3fe-b8e6bb5e358c
+1c0af5f0-2450-40a3-979a-73fd354f8633
+1cab422d-bdbb-4aa2-9fad-1d1f5b5828df
+1e698faf-1f64-4d14-a83d-6a65e69d03ce
+1f12c377-7dd4-4398-8302-af1cb671c223
+20b09792-3e98-499c-9540-e336442b2578
+23b14c9a-cdad-4ddf-89d0-e361509c1c1e
+244a9cf1-04a4-4ae2-ae0f-b70d023a92a3
+26b28c74-cc82-40e9-b330-57d7d0a27d17
+29a77ec8-130a-4770-9d6f-4c34ad8ae08c
+2a542d49-d654-4a0d-a74b-f9d4e0af05f2
+2a71a524-3724-49d4-bd6a-2448509cc073
+2af9c0a6-ce2d-4084-a433-708b301d7381
+2ba5b22a-ba2f-46f0-ae73-6fab4a41b433
+2c8982cf-4ab0-44d9-b767-ead75ab4b6e3
+2cf1755b-c277-4bc8-a40b-627ba800b2e3
+2d3d6e91-292a-45c4-a2e7-c988fe823ad5
+2d9a37e7-6817-44f3-b6b8-5532e1e644ac
+2e49a9de-bd7b-4fef-b4fd-b48e33cf2700
+2f286ec3-7545-44c8-81f6-7faeddbf4e1f
+3125650d-2f3a-4ed1-8bda-0b34d6fb74a2
+31b03179-a8a2-47cf-8ac8-925286b2ec30
+32dbbd3b-6015-4c28-ab59-0d9f81c0bbd3
+33e3aa3b-1dd4-4645-b605-5df5d4f52056
+3548cd6f-be6a-4c87-96c1-1ed2fdd93501
+3653ead3-9939-4d6f-bb1d-09dbc129f0c7
+3869cddf-6059-4a4d-8aa9-a6636c3cb38a
+3b282359-ad78-4346-b15e-7e3d67cf0946
+3c5a15b1-7747-498d-96d4-ef2f2b7d40e4
+3c85f760-6357-4a16-a63f-4ad3807500f5
+401ad3e5-e8fa-4a12-9639-5f1e848604fa
+4a2454b1-9740-4f7c-be7f-ed14eed18622
+4b06f7de-a869-4625-a46e-d123a330fd4b
+4c1976d9-a00c-49a9-8e20-eb5eadf8cc32
+4cf4674d-0f56-43f1-949d-448d455633e4
+4da5c847-baab-4278-85c2-dc36da82cbd8
+4ec680c2-e589-4448-af9e-f7cc48e3b45d
+4fb6f237-82a5-4475-a350-95ebf21288d2
+50df5538-d970-4464-bfbc-86cefb95463c
+515b3f61-919e-461d-a042-cbebad57c83f
+53eeabc5-8c18-4112-8745-48a05c8f44a9
+552a4dff-ac2b-4fbc-856c-978603594cb2
+55d6cb75-c447-4d57-8eb4-c340623e0ea1
+58575cda-b8b1-49e0-beb6-6cfb49846e70
+58aa2c65-72cf-4f0c-aace-9b9263b603ad
+5ba5ceb9-f1bc-4d3b-9a75-32e36bb89e16
+5c9658f4-85d3-4d81-b648-78798d186ebf
+66575841-12a3-4eb0-a1cb-b70649504057
+6af6172f-d061-4c47-9567-8a160b389676
+6d819a7f-2dbc-4b5d-9962-536d3cb65e51
+6de4a48b-ae0e-4643-a9bc-5a2b17a86f3d
+6ecaa3e3-9b37-4185-977c-75a51ca5d33d
+6fa59e75-8fc4-4b17-97fb-01f52bc5dc19
+72bb0870-945c-4390-a82a-fce5f8650652
+73e6da4d-5c36-457f-b43c-c55e8413becb
+7403a9ac-8703-47f9-993a-67b975f64f4b
+7639bf68-5c43-4afb-b7ba-eb1858e72aa4
+76ebef92-2562-40aa-95ad-88e3315d1cbc
+79009475-3df3-4cd4-b44b-05b9a5eb1fda
+7aa9e422-805b-4b3e-bdac-85ca2e29a986
+7b9c2242-defa-48c9-b379-5cbd0e5bb637
+7ece0a73-4dd5-4248-972e-6b722eb4268c
+809fb8be-1303-4e47-a562-877f9fa66f27
+827252bf-eac1-43fe-9376-6dfe776cc8f2
+8542c463-550c-4bbf-96a4-080f59584926
+85924571-875c-493f-b241-56adfc3e9373
+87265f8e-03a7-4236-8043-e842723f6243
+872a8fac-d89d-446b-b78e-a66954571628
+942448ee-1e8b-4a8d-be52-bf5cc3742a9a
+97955769-6947-4622-abf5-855696d699bc
+98267790-ef44-47ba-8bad-3baf5c990a27
+9839709d-47d6-4d4c-ae7a-d338dd192b6f
+9a49aa37-dfef-440b-a4cf-d4f1f35b34ca
+9e068281-fd95-4e26-89c8-4a244d206b3b
+a4696cbe-0088-4fe9-a801-0d184ef76154
+a78b11a1-045a-40f6-9c33-49695141fe4e
+a8d7588f-161d-4a82-b53a-05b5e2d9a028
+ab41d244-4eb7-4767-aace-7eda6365bcb6
+ac5106d6-34d5-4067-b20b-d6f25f3a7669
+b3a2831c-7275-4fd5-8436-13354b738572
+b5e76a4b-bc02-43ec-8441-f33ddb4ed55c
+ce090770-3dc5-4a0f-9c46-1ae8a4d3f661
+d2706da8-39a8-4353-bfd4-3b967c4c0491
+d2cccc32-0af5-4240-add2-d5bf653bee65
+e92eab89-30c2-48b4-89e8-f1a3572c91f1
+```
+
+### Methods compared
+
+| Method | What orders the jobs |
+|---|---|
+| A: hybrid | the shipped score, constants as in section 2 (floor 0.715, ceiling 0.86) |
+| B: hybrid, CV-job calibration | the same formula with a floor and a ceiling taken from CV-job cosines (below) |
+| skills only | skill coverage alone (the embedding weight set to 0) |
+| embedding only | the raw cosine of CV and job vectors |
+| newest first | `posted_at` descending (`created_at` when missing) |
+| random | no order; reported as the relevant share of the labelled random jobs |
+
+Ties are broken by the newer job, then by job id, in every method, so a ranking is reproducible.
+
+### The sheets
+
+Per persona, the sheet holds the union of **the top 5 of each of A, B, skills only, embedding only and
+newest first**, plus **10 random jobs** drawn with a fixed seed from the pool jobs not already in that
+union. That is about 20 to 30 jobs per persona. The union is used, and not the system's top jobs
+alone, so that no baseline is judged on jobs nobody labelled. The sheet is shuffled with a fixed seed
+and each item has an opaque number. The labelling tool shows a job's public fields (title, company,
+seniority, remote policy, stack, salary) and the start of its post, and **never** a rank, a score, a
+method or a number that could reveal either. The answer key (which jobs each method put where) is
+written to a different directory and is not opened before labelling ends.
+
+**P@10 is reported only for a persona and a method whose top 10 are all labelled.** The top 5 are
+always labelled by construction; ranks 6 to 10 are labelled only where they fall in the union or the
+random draw. Where a rank among the top 10 has no label, P@10 is reported as "not measured", never as
+a count over fewer jobs.
+
+### The relevance scale
+
+Labels are made from the persona's point of view, using the persona's CV profile and preferences. One
+label per job.
+
+- **relevant**: the persona would apply. The main work of the job matches the persona's skills and
+  seniority, and no stated preference is violated.
+- **maybe**: adjacent. The domain or part of the stack matches but the main work differs, or the
+  seniority is one level off, or one key requirement is missing.
+- **no**: a different field or role, or a stated preference is violated (seniority more than one level
+  off, on-site or hybrid when the persona wants remote, a stated maximum salary below the persona's
+  minimum).
+
+A job that does not say something (no seniority, no remote policy) does not violate it. Unknown never
+makes a job `no` by itself.
+
+Worked examples, chosen from the pool by title, seniority, remote policy and stack, before any sheet
+existed and without looking at any score. The id is the first 8 characters of the job id.
+
+| Persona | Label | Job | Why |
+|---|---|---|---|
+| Alex | relevant | `4cf4674d` Senior Backend Developer (Python); senior, remote; Python, Django, SQL, PostgreSQL, Docker, Kubernetes, AWS, GCP | backend Python work at Alex's level and preference |
+| Alex | maybe | `14a2b4d7` Senior Data Engineer; senior, remote; SQL, Python, dbt, BigQuery, PostgreSQL | senior, remote, shares Python, SQL and PostgreSQL, but the main work is data pipelines, not backend services |
+| Alex | no | `ce090770` Category Manager - Apparel; mid, remote | a different field |
+| Sam | relevant | `ac5106d6` Software engineer; remote; TypeScript, React, GraphQL, PostgreSQL, GCP | TypeScript and React work, no seniority stated |
+| Sam | maybe | `3c85f760` Senior React Full-stack Developer; senior, remote | the right stack, one level above Sam's junior or mid |
+| Sam | no | `0c02a211` Senior Director, Field Enablement; senior; Salesforce | a different field and far above Sam's level |
+| Jordan | relevant | `14a2b4d7` Senior Data Engineer; senior, remote; SQL, Python, dbt, BigQuery, PostgreSQL | data work with Python and SQL at Jordan's level and preference |
+| Jordan | maybe | `7b9c2242` Machine Learning Engineer; remote; AWS, PyTorch, TensorFlow, Airflow, Python | shares Python, AWS and Airflow, but model building rather than data engineering; seniority not stated |
+| Jordan | no | `0922063b` Framer Website Designer; onsite; HTML, CSS | a different field, and on-site |
+
+These nine rows illustrate the scale; they are not exhaustive, and the labeller decides each job on
+its post. The same job may carry different labels for different personas.
+
+**Seen examples.** The nine jobs above stay in the sheets with the labels documented here, and the
+sheet key marks them `seen_example`, so the scoring can report results with and without them. If the
+labeller changes their mind about one after reading its post, the change is recorded below as a dated
+note and the table above is never edited; the scoring then reports both the documented and the
+changed label.
+
+Dated notes on the worked examples: none yet.
+
+### Who labels, and how
+
+One labeller: the project's owner, who also built the system. This is a bias and is stated in the
+limits. To keep it small: labels are made on the blind sheet only, the owner does not open
+`GET /matches` or any scoring output for these personas before the last persona is labelled, and each
+persona is labelled in one sitting where possible. The labelling tool saves after every label and
+writes **one file per persona** (`.local/match_eval/labels/<persona>.json`: item number, job id and
+label, nothing else). The answer key lives in a different directory (`.local/match_eval/key/`), and
+the scoring script is the only reader of both.
+
+### Metrics
+
+- **P@5 and P@10** as raw counts (for example 3/5), per persona and method, never only as a ratio.
+  Pooled P@5 is the sum over the three synthetic personas, out of 15.
+- **Primary count: `relevant` only.** Secondary count: `relevant` plus `maybe`.
+- The same counts for the technical-posts stratum (jobs with a non-empty stack): the top 5 of each
+  method restricted to those jobs.
+- **Random** is the number of `relevant` among the labelled random jobs of that persona, out of 10;
+  the expected value for five random jobs is half of it.
+- No confidence interval, test or p-value is reported: with 15 slots there is no meaningful one.
+
+### The pass rule
+
+Fixed now, not after seeing a result. The evaluation passes when **all** of these hold:
+
+1. pooled P@5 (primary count, method A) over Alex, Sam and Jordan is **at least 9/15**;
+2. it is **strictly more** than the pooled P@5 of newest first;
+3. every persona is reported, including any persona where A does worse than a baseline.
+
+The real CV, if used, is reported apart as counts only and is not part of the rule. A miss is reported
+as FAIL. It is not repaired by changing the weights, the floor or the ceiling afterwards: any such
+change is a new `SCORER_VERSION` in a separate PR, evaluated again from a fresh sheet.
+
+### The CV-job calibration question
+
+The floor and ceiling of section 2 come from job-job pairs, and CV-job cosines sit lower (section 2,
+"How to read a score"). Whether recalibrating helps is tested **without using any label**.
+
+- **A** is the shipped constants (0.715 and 0.86).
+- **B** uses the same rule as section 2, **P50 and P99**, applied to CV-job cosines: the cosines of a
+  persona's CV against every job of the pool.
+- **Held-out rule.** For each synthetic persona, B's floor and ceiling come **only from the other two
+  personas' CV-job cosines**, never from the held-out persona's own CV. The real CV, if used, is held
+  out the same way: its B constants come from the three synthetic personas only.
+- B is reported next to A, side by side, for every persona. **B is recommended only if it adds at
+  least 2 relevant jobs to the pooled P@5 and loses relevant jobs in no persona.** Otherwise the
+  result is "no evidence that it helps" and A stays.
+- Limit: B's constants are computed on the same pool the sheets are drawn from (never on labels, never
+  on the held-out persona), so this is not an out-of-sample test.
+
+A change to the shipped constants is out of scope for this PR whatever B shows.
+
+### The scripts and their guards
+
+`scripts/eval_match_sheet.py`, `eval_match_label.py` and `eval_match_score.py` are run by hand, never
+by CI or app code. The sheet script reads the database read-only, refuses a database not named
+`jobradar`, builds no LLM client and refuses `--allow-provider`. The scoring script needs no database,
+model or provider: it reads the pool snapshot, the key and the label files. It prints counts and
+opaque numbers only, never CV text, skills or notes, and writes a run record (constants, versions,
+file hashes, counts) under `.local/match_eval/runs/`.
+
+### Limits of this evaluation
+
+- Tiny sample: three invented personas and at most one real CV, 5 slots per P@5. No claim about
+  accuracy in general, and no significance.
+- One labeller, who also built the system.
+- One source mix: two public feeds, one with a board-specific rule, stored at one date.
+- Non-software jobs are in the pool (hence the technical stratum).
+- Skill weights are equal (section 8); duplicate texts are collapsed to one job.
+- B is calibrated on the pool it is evaluated on.
+- It scores the scorer's code on a frozen pool, not the Celery pipeline, the sweep or the API.
+- The embedding model is an English-only int8 model; a non-English CV is outside the evaluation.
+
+## 11. Privacy checklist for the optional real CV
+
+Applies only if the owner chooses to include their own CV. Nothing in section 10 needs it.
+
+- The file lives only under `.local/cv/` (git-ignored; check with `git check-ignore`). The pre-commit
+  hook already rejects a CV-like file outside `tests/fixtures/cv`.
+- It is uploaded only to the local stack, with `curl.exe --data-binary @.local\cv\<file>` to the local
+  API, and only after the owner has checked that their `.env` names no hosted provider (this
+  repository's tooling never reads `.env`). `worker-embed` has no route to the internet.
+- Emails, phone numbers and links are masked; names are not.
+- A `pg_dump` of the development database contains the `cvs` table: back up outside the repository and
+  use `--exclude-table-data=cvs` while the real CV is stored.
+- Afterwards: `DELETE /api/v1/cv`, check with a count query that no `cvs` row and no `job_matches` row
+  remains for that account, delete the file, and clear the shell history of the upload line.
+- Labels, answer key and run records hold item numbers, job ids and counts only.
+- One canary run, once: upload a **copy** with a unique marker line to a throwaway local account, run
+  the flow and every match endpoint, and count (print only counts) the marker in the API and worker
+  logs, Redis keys and values, `match_status` and `job_matches` rows and the responses. After the
+  `DELETE`, count it in a full `pg_dump`: it must be 0.
