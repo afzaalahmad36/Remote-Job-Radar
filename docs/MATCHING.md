@@ -727,6 +727,20 @@ The floor and ceiling of section 2 come from job-job pairs, and CV-job cosines s
 
 A change to the shipped constants is out of scope for this PR whatever B shows.
 
+### Note, 2026-11-19: the baselines are not on equal footing
+
+This note was added before any sheet was built and before any label exists; it clarifies the table of
+methods and changes no rule.
+
+- **Skills only** is the shipped scorer with the embedding weight at zero (no cosine is given to
+  `score_match`). The hard filters and the cap of 30 therefore **still apply** to it.
+- **Embedding only** is the raw cosine of the CV and job vectors and applies **no filter**.
+- **Newest first** and **random** use neither skills nor filters.
+- The five methods are therefore **not on equal footing**: A, B and skills only know the persona's
+  seniority, remote policy and salary preferences; embedding only, newest first and random do not.
+  Every result table and every statement of a result must say so next to the numbers, and a method
+  that "loses" to the hybrid is not evidence about its signal alone.
+
 ### The scripts and their guards
 
 `scripts/eval_match_sheet.py`, `eval_match_label.py` and `eval_match_score.py` are run by hand, never
