@@ -1,0 +1,22 @@
+Sam Sample
+Frontend Developer
+sam.sample@example.com | +1 555 010 0142 | https://github.com/sam-sample | linkedin.com/in/sam-sample
+
+SUMMARY
+Frontend developer with 2 years of experience building web interfaces. Looking for a remote junior or mid-level role.
+
+EXPERIENCE
+Frontend Developer, Fabrikam Demo Studio (2024 - present)
+- Built a customer dashboard with React, TypeScript and Next.js.
+- Wrote component tests with Jest and added end-to-end checks with Cypress.
+- Turned Figma designs into accessible HTML and CSS, styled with Tailwind.
+
+Junior Web Developer, Adventure Sample Works (2023 - 2024)
+- Maintained marketing sites in JavaScript, HTML and CSS.
+- Connected pages to a GraphQL API.
+
+EDUCATION
+Diploma in Web Development, Example Community College (2021 - 2023)
+
+SKILLS
+React, TypeScript, Next.js, JavaScript, HTML, CSS, Tailwind, GraphQL, Jest, Cypress, Figma, Git
