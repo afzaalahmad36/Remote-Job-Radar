@@ -1,0 +1,22 @@
+Jordan Placeholder
+Senior Data Engineer
+jordan.placeholder@example.com | +1 555 010 0177 | https://github.com/jordan-placeholder | linkedin.com/in/jordan-placeholder
+
+SUMMARY
+Data engineer with 9 years of experience in data pipelines, warehousing and machine learning. Looking for a senior remote role.
+
+EXPERIENCE
+Senior Data Engineer, Tailspin Demo Analytics (2020 - present)
+- Built Airflow pipelines on AWS that load 4 TB a day into Snowflake, modelled with dbt.
+- Wrote Spark jobs in Python and tuned slow SQL queries.
+- Trained and deployed churn models with scikit-learn and PyTorch.
+
+Data Analyst, Wingtip Sample Systems (2016 - 2020)
+- Analysed sales data with pandas and SQL, and built dashboards in Tableau.
+- Moved reports from spreadsheets to a PostgreSQL warehouse.
+
+EDUCATION
+MSc Statistics, Example University (2014 - 2016)
+
+SKILLS
+Python, SQL, pandas, Airflow, AWS, Snowflake, dbt, Spark, scikit-learn, PyTorch, PostgreSQL, Docker, Tableau

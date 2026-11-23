@@ -10,3 +10,9 @@ PDF, and any file named like a CV, outside this folder.
 
 Backups of the database (`pg_dump`) and run records written under `.local/` can contain CV text.
 Keep them outside the repository.
+
+## Files
+
+- `alex_example.txt`, `sam_example.txt`, `jordan_example.txt`: the three invented personas of the
+  matching evaluation (backend, frontend, data).
+- `personas.toml`: their fixed preferences (docs/MATCHING.md, section 10).

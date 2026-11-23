@@ -1,0 +1,23 @@
+# The invented personas of the matching evaluation (docs/MATCHING.md, section 10).
+# The CV path is relative to this file. Preferences are fixed before any sheet exists.
+
+[[persona]]
+name = "alex"
+cv = "alex_example.txt"
+seniority_levels = ["senior", "lead"]
+remote_policies = ["remote"]
+min_salary = 100000
+salary_currency = "USD"
+salary_period = "year"
+
+[[persona]]
+name = "sam"
+cv = "sam_example.txt"
+seniority_levels = ["junior", "mid"]
+remote_policies = ["remote"]
+
+[[persona]]
+name = "jordan"
+cv = "jordan_example.txt"
+seniority_levels = ["senior"]
+remote_policies = ["remote"]
