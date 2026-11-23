@@ -784,3 +784,144 @@ Applies only if the owner chooses to include their own CV. Nothing in section 10
   the flow and every match endpoint, and count (print only counts) the marker in the API and worker
   logs, Redis keys and values, `match_status` and `job_matches` rows and the responses. After the
   `DELETE`, count it in a full `pg_dump`: it must be 0.
+
+## 12. Results of the evaluation (2026-11-23)
+
+This section only records results. It changes no protocol text, constant, label or key: the protocol
+of section 10 (fixed on 2026-11-19, before any sheet or label existed) is applied as written.
+
+**Verdict: FAIL against the pass rule fixed on 2026-11-19.** The rule was pooled P@5 of hybrid A of at
+least 9/15 and strictly more than newest first. Hybrid A's pooled P@5 is **6/15**, which beats newest
+first (**4/15**) and misses the threshold of 9/15.
+
+### What was run
+
+- Source: the run record `run-20261123T123526Z.json` (`.local/match_eval/runs/`, git-ignored; it holds
+  constants, versions, file hashes and counts, no job id, text or CV). A first run of the same files
+  (`run-20261123T061524Z.json`) has the same file hashes and the same counts.
+- Scorer `score_v1`, seed 1, weights 0.6 / 0.4, floor 0.715, ceiling 0.86, cap 30 (method A). Pool: 108
+  jobs, hash `7cd0b36da7ed...` (section 10). Three invented personas (Alex, Sam, Jordan), each
+  labelled completely by one labeller on a blind sheet; no real CV took part.
+- Files hashed in the run record (SHA-256): the key `1492a288...`, the sheets of Alex, Sam and
+  Jordan (`29a86da1...`, `39e086cc...`, `80fb7583...`) and their three labels files
+  (`d17b5f89...`, `1a85bf01...`, `25d46361...`).
+- No re-tuning was done. Nothing was changed after the first label was written, and nothing was
+  changed after the result was known.
+
+### Per persona (P@5, counts)
+
+"rel" counts `relevant` only (the primary count); "rel+maybe" counts both. "Documented" counts the
+seen worked examples with their documented labels; "no examples" leaves them out (fewer slots). "Tech"
+is the top 5 of the jobs with a stack, shown only where all of them are labelled. P@10 is not
+measured for any persona or method: ranks 6 to 10 are not all labelled (section 10).
+
+The baselines are **not on equal footing**: hybrid A, hybrid B and skills only apply the persona's
+hard filters and the cap of 30; embedding only, newest first and random do not.
+
+| Persona | Method | P@5 rel | rel+maybe | Tech | Documented | No examples | P@10 |
+|---|---|---|---|---|---|---|---|
+| Alex | hybrid A | 2/5 | 3/5 | 2/5 | 3/5 | 2/4 | not measured |
+| Alex | hybrid B | 2/5 | 3/5 | not measured | 3/5 | 2/4 | not measured |
+| Alex | skills only | 0/5 | 2/5 | 0/5 | 1/5 | 0/4 | not measured |
+| Alex | embedding only | 2/5 | 3/5 | not measured | 3/5 | 2/4 | not measured |
+| Alex | newest first | 2/5 | 3/5 | not measured | 2/5 | 2/5 | not measured |
+| Sam | hybrid A | 2/5 | 4/5 | 2/5 | 3/5 | 2/4 | not measured |
+| Sam | hybrid B | 1/5 | 3/5 | 1/5 | 2/5 | 1/4 | not measured |
+| Sam | skills only | 1/5 | 2/5 | 1/5 | 2/5 | 1/4 | not measured |
+| Sam | embedding only | 2/5 | 4/5 | not measured | 2/5 | 2/5 | not measured |
+| Sam | newest first | 1/5 | 3/5 | not measured | 1/5 | 1/5 | not measured |
+| Jordan | hybrid A | 2/5 | 4/5 | 2/5 | 2/5 | 1/4 | not measured |
+| Jordan | hybrid B | 3/5 | 4/5 | 3/5 | 3/5 | 2/4 | not measured |
+| Jordan | skills only | 3/5 | 4/5 | 3/5 | 3/5 | 2/4 | not measured |
+| Jordan | embedding only | 1/5 | 3/5 | 1/5 | 1/5 | 0/4 | not measured |
+| Jordan | newest first | 1/5 | 3/5 | not measured | 1/5 | 1/5 | not measured |
+
+Calibration B constants (floor / ceiling, each from the other two personas only): Alex 0.6848 / 0.8020,
+Sam 0.6945 / 0.8072, Jordan 0.6853 / 0.8044.
+
+### Pooled P@5 over the three synthetic personas (out of 15)
+
+| Method | rel | rel+maybe | Documented | No examples |
+|---|---|---|---|---|
+| hybrid A | 6/15 | 11/15 | 8/15 | 5/12 |
+| hybrid B | 6/15 | 10/15 | 8/15 | 5/12 |
+| skills only | 4/15 | 8/15 | 6/15 | 3/12 |
+| embedding only | 5/15 | 10/15 | 6/15 | 4/13 |
+| newest first | 4/15 | 9/15 | 4/15 | 4/15 |
+
+The technical-posts column is pooled only where measured, so it is not comparable across methods
+(hybrid A 6/15 over three personas, hybrid B 4/10 over two, newest first and embedding only mostly
+not measured) and no conclusion is drawn from it.
+
+**Random baseline:** 12/30 of the labelled random jobs were `relevant` (Alex 4/10, Sam 5/10,
+Jordan 3/10) and 23/30 were `relevant` or `maybe` (8/10, 8/10, 7/10).
+
+**Calibration B against A:** gain 0 relevant jobs in the pooled P@5 (6/15 against 6/15), and B loses
+in a persona (Sam, 1/5 against 2/5; it gains one in Jordan). The rule of section 10 needs a gain of at
+least 2 and no loss, so there is **no evidence that the CV-job calibration helps, and A stays**.
+
+### Dated notes, 2026-11-23: worked examples the labeller labelled differently
+
+Under the "Seen examples" rule of section 10, four of the nine worked examples carry a different
+label on the labelled sheets than in the table of section 10. The table is not edited. Jobs are named
+by the first 8 characters of their id. Both versions are reported: the primary columns use the
+labeller's label, the "documented" column the documented one.
+
+| Date | Persona | Job | Documented | Labelled |
+|---|---|---|---|---|
+| 2026-11-23 | Alex | `4cf4674d` | relevant | no |
+| 2026-11-23 | Alex | `14a2b4d7` | maybe | relevant |
+| 2026-11-23 | Sam | `ac5106d6` | relevant | no |
+| 2026-11-23 | Jordan | `7b9c2242` | maybe | relevant |
+
+### What this shows, and what it does not
+
+- Hybrid A's pooled P@5 of 6/15 **beats newest first (4/15)** and **misses the 9/15 threshold**.
+  The evaluation fails.
+- The labelled random jobs were as often relevant (12/30, 40%) as hybrid A's top 5 (6/15, 40%).
+  On this sample the hybrid's top 5 is no better than a random job at the `relevant` level. At the
+  `relevant` or `maybe` level they are also about equal (top 5: 11/15, 73%; random jobs: 23/30, 77%).
+- The pool's base rate is high: about 4 in 10 random jobs are relevant to an invented persona, so a
+  top 5 has to beat a high bar, and 5 slots per persona cannot show a small difference.
+- The "no examples" column gives the same picture: hybrid A 5/12 and hybrid B 5/12 against newest
+  first 4/15, with skills only 3/12 and embedding only 4/13. Leaving the examples out does not change
+  the verdict. Counting the examples with their documented labels gives hybrid A 8/15, which is still
+  below 9/15.
+- P@10 is not measured, because the top 10 are not fully labelled.
+- One labeller, who built the system, labelled all three personas, and four of the nine worked
+  examples were labelled differently from their documented labels (above).
+- The baselines are not on equal footing (above), so a method that scores below the hybrid is not
+  evidence about its signal alone.
+- No re-tuning was done. The weights, the floor and the ceiling are unchanged.
+
+### Hypotheses for the weak ranking (hypotheses, not findings)
+
+None of these was tested here, and none is a conclusion.
+
+1. **Stub posts with no stack.** Some jobs in the pool have no stack. They cannot get a skills score,
+   so they are ranked by the embedding alone; and some posts are very short.
+2. **The 1,800-character embedding window.** A job is embedded from its title, fields and the first
+   1,800 characters of the post, so a vector may describe a company introduction and not the work.
+3. **Dictionary gaps.** A skill the dictionary does not know is not matched, in a CV or a job, which
+   lowers skill coverage for both.
+4. **A high base rate.** If many jobs in the pool are relevant to a persona, no ranking can show a large
+   gain in a top 5.
+
+### What would come next
+
+Any change to the scorer (the weights, the floor and ceiling, how stubs or the embedding text are
+treated, the dictionary) would be a **new `SCORER_VERSION` in a separate PR, with a new protocol
+written before any new sheet or label**, and evaluated again from fresh sheets. This result is not
+repaired in place.
+
+### Limits of this result
+
+- Tiny n: three invented personas, 5 slots per P@5, 15 pooled. No claim beyond this sample, and no
+  significance.
+- One labeller, who also built the system.
+- One source mix: two public feeds, one with a board-specific rule, stored at one date.
+- Non-developer jobs and short stub posts are in the pool.
+- Equal skill weights (section 8).
+- An English-only, int8 embedding model.
+- The scorer's code was tested on a frozen pool, not the Celery pipeline, the sweep or the API.
+- B is calibrated on the pool it is evaluated on (never on labels).
