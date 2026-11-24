@@ -5,11 +5,15 @@ An AI-assisted job pipeline: it ingests remote job posts from RSS feeds, extract
 LLM only for what the rules miss**, and ranks the jobs against your CV with a score from 0 to 100
 and a written explanation. The CV is processed locally and **never reaches a hosted AI provider**.
 
-> **Measured, not claimed.** On 30 hand-labelled posts the extraction rules get title, company,
-> salary and seniority right 93 to 97% of the time, but only 13/30 posts have *every* field right
-> (target 90%, **not met**). The matching ranking **failed** its pre-registered test: on the
-> evaluation pool its top 5 was no better than random jobs. Details, method and limits are in
-> [Results](#results) and are not softened.
+> **Measured, not claimed.**
+> - Extraction: title, company, salary and seniority are 93 to 97% accurate on the **completed
+>   labels** (30 hand-labelled posts), but only 13/30 posts (43.3%) have *every* field right on the
+>   **first-pass labels**. The 90% target is **not met**.
+> - Matching: the ranking **failed** its pre-registered test; on the evaluation pool its top 5 was
+>   no better than random jobs.
+>
+> The two extraction numbers use different label sets on purpose and are both reported; details,
+> method and limits are in [Results](#results).
 
 This is a portfolio project, built phase by phase with tests alongside each feature. Phases 1 to 4
 are done (API, auth, ingestion, extraction, CV, embeddings, matching); there is no frontend yet
@@ -128,7 +132,10 @@ uv sync
 uv run python -m scripts.seed_demo     # prints the demo login ONCE (a random password)
 ```
 
-The seed script writes only to a database named `jobradar` on this machine, refuses `ENV=production`
+The script runs **from your host, not inside a container**, so the database must be reachable on
+`localhost`: create the local, git-ignored `docker-compose.override.yml` that publishes the db port
+and set `DATABASE_URL` to match (see [CLAUDE.md](CLAUDE.md), section 10). It writes only to a
+database named `jobradar` on this machine, refuses `ENV=production`
 and makes no network or provider request. `--demo-password` gives a fixed, **public** password
 (`demo@example.com` / `demo-password-local-only`) for a throwaway local database only. Screenshots
 and transcripts of the demo are in [docs/demo/](docs/demo/).
