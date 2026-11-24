@@ -166,7 +166,7 @@ curl.exe -s -X PUT "$base/cv" -H $auth -H "Content-Type: text/plain" `
 ```
 
 The reply holds the stored text with the email, phone and links already masked
-(`[email removed]` and so on). The skills were read from it on upload:
+(a link becomes `[link]`, and so on). The skills were read from it on upload:
 
 ```powershell
 curl.exe -s "$base/cv/skills" -H $auth | ConvertFrom-Json | Select-Object -ExpandProperty skills
