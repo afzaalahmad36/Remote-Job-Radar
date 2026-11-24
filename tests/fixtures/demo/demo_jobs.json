@@ -1,0 +1,105 @@
+{
+  "note": "Invented posts for the demo. Every company is fictional and every address is example.com; any resemblance to a real company is a coincidence.",
+  "jobs": [
+    {
+      "external_id": "demo-01",
+      "days_before": 2,
+      "text": "Senior Backend Engineer at Fernhill Systems\n\nFernhill Systems is hiring a Senior Backend Engineer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will own the billing API and its background jobs.\nStack: Python, FastAPI, PostgreSQL, Docker, Redis.\nSalary: $120,000 - $150,000 per year\nApply: https://example.com/careers/senior-backend or jobs@example.com"
+    },
+    {
+      "external_id": "demo-02",
+      "days_before": 3,
+      "text": "Lead Platform Engineer at Quillon Data\n\nQuillon Data is hiring a Lead Platform Engineer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will lead a team of four that runs our deployment platform.\nStack: Kubernetes, AWS, Terraform, Python, Docker.\nSalary: $140,000 - $170,000 per year\nApply: https://example.com/careers/lead-platform or jobs@example.com"
+    },
+    {
+      "external_id": "demo-03",
+      "days_before": 4,
+      "text": "Junior Python Developer at Tidewater Apps\n\nTidewater Apps is hiring a Junior Python Developer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nA great first job: you will be paired with a mentor for six months.\nStack: Python, Django, PostgreSQL, Git.\nApply: https://example.com/careers/junior-python or jobs@example.com"
+    },
+    {
+      "external_id": "demo-04",
+      "days_before": 5,
+      "text": "Mid-level Full-Stack Developer at Brambleway Studio\n\nBrambleway Studio is hiring a Mid-level Full-Stack Developer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will build customer dashboards from the database up to the browser.\nStack: React, TypeScript, Node.js, PostgreSQL.\nSalary: EUR 55,000 - 70,000 per year\nApply: https://example.com/careers/mid-fullstack or jobs@example.com"
+    },
+    {
+      "external_id": "demo-05",
+      "days_before": 6,
+      "text": "Senior Frontend Engineer at Oakmere Health Tech\n\nOakmere Health Tech is hiring a Senior Frontend Engineer. This is a hybrid role: three days a week in our London office.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will lead the design system used by four product teams.\nStack: React, TypeScript, GraphQL, Jest.\nSalary: GBP 65,000 - 80,000 per year\nApply: https://example.com/careers/senior-frontend or jobs@example.com"
+    },
+    {
+      "external_id": "demo-06",
+      "days_before": 7,
+      "text": "Senior Data Engineer at Larkspur Analytics\n\nLarkspur Analytics is hiring a Senior Data Engineer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will build the pipelines that feed our reporting product.\nStack: Python, Airflow, PostgreSQL, AWS, Docker.\nSalary: $115,000 - $140,000 per year\nApply: https://example.com/careers/senior-data or jobs@example.com"
+    },
+    {
+      "external_id": "demo-07",
+      "days_before": 8,
+      "text": "Mid-level Backend Developer at Stonebridge Logistics\n\nStonebridge Logistics is hiring a Mid-level Backend Developer. This is an on-site role in Berlin; no remote work.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will extend our parcel tracking services.\nStack: Go, PostgreSQL, Kafka, Docker.\nSalary: EUR 60,000 - 75,000 per year\nApply: https://example.com/careers/mid-backend-go or jobs@example.com"
+    },
+    {
+      "external_id": "demo-08",
+      "days_before": 9,
+      "text": "Senior DevOps Engineer at Marlowe Cloudworks\n\nMarlowe Cloudworks is hiring a Senior DevOps Engineer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will keep our build pipeline fast and our clusters boring.\nStack: AWS, Docker, Kubernetes, Terraform, GitHub Actions.\nSalary: $130,000 - $160,000 per year\nApply: https://example.com/careers/senior-devops or jobs@example.com"
+    },
+    {
+      "external_id": "demo-09",
+      "days_before": 10,
+      "text": "Junior Frontend Developer at Ashgrove Learning\n\nAshgrove Learning is hiring a Junior Frontend Developer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will build lesson pages and small interactive exercises.\nStack: React, JavaScript, CSS, Git.\nApply: https://example.com/careers/junior-frontend or jobs@example.com"
+    },
+    {
+      "external_id": "demo-10",
+      "days_before": 11,
+      "text": "Senior Java Engineer at Redfern Payments\n\nRedfern Payments is hiring a Senior Java Engineer. This is an on-site role in Dublin.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will work on the settlement engine.\nStack: Java, Spring, Kafka, PostgreSQL, Docker.\nSalary: EUR 80,000 - 95,000 per year\nApply: https://example.com/careers/senior-java or jobs@example.com"
+    },
+    {
+      "external_id": "demo-11",
+      "days_before": 12,
+      "text": "Mid-level Python Developer at Willowmere Retail\n\nWillowmere Retail is hiring a Mid-level Python Developer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will improve checkout and order notifications.\nStack: Python, Django, Celery, Redis, PostgreSQL.\nSalary: $85,000 - $105,000 per year\nApply: https://example.com/careers/mid-python or jobs@example.com"
+    },
+    {
+      "external_id": "demo-12",
+      "days_before": 13,
+      "text": "Staff Backend Engineer at Cinderford Maps\n\nCinderford Maps is hiring a Staff Backend Engineer. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will set the technical direction of our routing services.\nStack: Node.js, TypeScript, PostgreSQL, Redis, AWS.\nSalary: $150,000 - $180,000 per year\nApply: https://example.com/careers/staff-backend or jobs@example.com"
+    },
+    {
+      "external_id": "demo-13",
+      "days_before": 14,
+      "text": "Backend Developer wanted at Pinecrest Soft. Python, Django. Remote. Apply: https://example.com/careers/stub-backend"
+    },
+    {
+      "external_id": "demo-14",
+      "days_before": 15,
+      "text": "Frontend Developer at Harbourlight Games. React, TypeScript. Remote. Apply: https://example.com/careers/stub-frontend"
+    },
+    {
+      "external_id": "demo-15",
+      "days_before": 16,
+      "text": "DevOps Engineer at Copperfield Hosting. AWS, Docker. On-site. Apply: https://example.com/careers/stub-devops"
+    },
+    {
+      "external_id": "demo-16",
+      "days_before": 17,
+      "text": "Data Engineer at Elmstead Insights. Python, SQL. Remote. Apply: https://example.com/careers/stub-data"
+    },
+    {
+      "external_id": "demo-17",
+      "days_before": 18,
+      "text": "Marketing Manager at Sunvale Foods\n\nSunvale Foods is hiring a Marketing Manager. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will plan campaigns, write newsletters and report on what worked.\nApply: https://example.com/careers/marketing or jobs@example.com"
+    },
+    {
+      "external_id": "demo-18",
+      "days_before": 19,
+      "text": "Customer Support Specialist at Bluepine Travel\n\nBluepine Travel is hiring a Customer Support Specialist. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will answer customer questions by email and chat during European hours.\nApply: https://example.com/careers/support or jobs@example.com"
+    },
+    {
+      "external_id": "demo-19",
+      "days_before": 20,
+      "text": "Accountant at Meadowlark Studio\n\nMeadowlark Studio is hiring a Accountant. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will prepare monthly accounts, manage invoices and support the annual audit.\nApply: https://example.com/careers/accountant or jobs@example.com"
+    },
+    {
+      "external_id": "demo-20",
+      "days_before": 21,
+      "text": "Technical Recruiter at Foxglove Partners\n\nFoxglove Partners is hiring a Technical Recruiter. This is a fully remote role.\nWe are a small, friendly team that values clear writing, careful code review and calm on-call weeks. You will work with product, design and support, ship small changes often and help us improve how we build. We hire without regard to background and answer every application. \nYou will find and interview engineers for our client teams.\nApply: https://example.com/careers/recruiter or jobs@example.com"
+    }
+  ]
+}
