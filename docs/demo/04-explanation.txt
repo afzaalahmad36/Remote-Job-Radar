@@ -1,0 +1,111 @@
+# Real run, 2026-11-24, on the invented demo data only (demo account, invented persona Alex).
+# Output of the walkthrough in docs/API_EXAMPLES.md; blank lines removed, secrets never printed.
+
+PS> curl.exe -s "$base/matches/$id" -H $auth | ConvertFrom-Json | ConvertTo-Json -Depth 8
+{
+    "job":  {
+                "id":  "a168c5b9-6196-4d5f-a05c-b5a1f8278645",
+                "source_id":  "edd06858-a7a1-4b03-bd99-af1999a89817",
+                "title":  "Frontend Developer",
+                "company":  null,
+                "stack":  [
+                              "React",
+                              "TypeScript"
+                          ],
+                "seniority":  null,
+                "remote_policy":  "remote",
+                "salary_min":  null,
+                "salary_max":  null,
+                "salary_currency":  null,
+                "salary_period":  null,
+                "posted_at":  "2026-11-09T11:05:14.772286Z",
+                "apply_email":  null,
+                "apply_url":  "https://example.com/careers/stub-frontend"
+            },
+    "score":  100,
+    "filters_failed":  false,
+    "missing_skills":  [
+                       ],
+    "scorer_version":  "score_v1",
+    "updated_at":  "2026-11-24T11:07:55.540742Z",
+    "reasons":  {
+                    "scorer_version":  "score_v1",
+                    "score":  100,
+                    "cap_applied":  false,
+                    "weights":  {
+                                    "configured":  {
+                                                       "skills":  0.6,
+                                                       "embedding":  0.4
+                                                   },
+                                    "effective":  {
+                                                      "skills":  1.0,
+                                                      "embedding":  0.0
+                                                  }
+                                },
+                    "components":  {
+                                       "skills":  {
+                                                      "coverage":  1.0,
+                                                      "matched":  2,
+                                                      "total":  2,
+                                                      "cv_skills":  15
+                                                  },
+                                       "embedding":  {
+                                                         "cosine":  0.7592,
+                                                         "floor":  0.715,
+                                                         "ceiling":  0.86,
+                                                         "normalised":  0.305
+                                                     }
+                                   },
+                    "skills":  {
+                                   "matched":  [
+                                                   "React",
+                                                   "TypeScript"
+                                               ],
+                                   "missing":  [
+                                               ]
+                               },
+                    "filters":  [
+                                    {
+                                        "name":  "remote_policy",
+                                        "outcome":  "pass",
+                                        "job":  "remote",
+                                        "preference":  [
+                                                           "remote"
+                                                       ]
+                                    },
+                                    {
+                                        "name":  "seniority",
+                                        "outcome":  "unknown",
+                                        "preference":  [
+                                                           "senior",
+                                                           "lead"
+                                                       ],
+                                        "reason":  "job_value_missing"
+                                    },
+                                    {
+                                        "name":  "salary",
+                                        "outcome":  "unknown",
+                                        "preference":  {
+                                                           "min":  100000,
+                                                           "currency":  "USD",
+                                                           "period":  "year"
+                                                       },
+                                        "reason":  "job_value_missing"
+                                    }
+                                ],
+                    "notes":  [
+                                  "not_english"
+                              ]
+                },
+    "note_messages":  [
+                          "The post does not look English: the embedding was not used."
+                      ],
+    "scoring":  {
+                    "state":  "up_to_date",
+                    "requested_at":  "2026-11-24T11:07:50.461085Z",
+                    "finished_at":  "2026-11-24T11:07:55.571752Z",
+                    "failure_count":  0,
+                    "max_attempts":  3,
+                    "error":  null
+                }
+}

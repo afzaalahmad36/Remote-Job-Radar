@@ -204,7 +204,11 @@ $page = curl.exe -s "$base/matches?limit=10" -H $auth | ConvertFrom-Json
 $page.items | ForEach-Object { "{0,3}  {1}  ({2})" -f $_.score, $_.job.title, $_.job.company }
 ```
 
-`score` is a rank for this CV from 0 to 100, **not** a probability. Jobs that fail one of Alex's
+`score` is a rank for this CV from 0 to 100, **not** a probability. Expect a surprise on the demo
+data: the three short "stub" posts (a headline, a stack and a link) can score 100, because their
+whole stack is on Alex's CV and the stub is too short to look English, so the embedding is skipped
+(`notes: ["not_english"]` in the explanation of step 6). That is the scorer's documented
+behaviour on stub posts (`docs/MATCHING.md`, section 3), shown here on purpose, not hidden. Jobs that fail one of Alex's
 hard preferences are capped at 30 and hidden unless you add `&include_filtered=true`. Read
 `docs/MATCHING.md` (sections 10 and 12) for how weak this ranking is on the evaluation pool.
 

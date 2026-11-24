@@ -1,0 +1,19 @@
+# Real run, 2026-11-24, on the invented demo data only (demo account, invented persona Alex).
+# Output of the walkthrough in docs/API_EXAMPLES.md; blank lines removed, secrets never printed.
+
+PS> do { $state = (curl.exe -s "$base/matches/status" -H $auth | ConvertFrom-Json).state; ... } while ($state -ne "up_to_date")
+scoring: pending
+scoring: up_to_date
+
+PS> $page.items | ForEach-Object { "{0,3}  {1}  ({2})" -f $_.score, $_.job.title, $_.job.company }
+total: 11, scoring: up_to_date
+100  Frontend Developer  ()
+100  Backend Developer wanted  ()
+100  Data Engineer  ()
+ 90  Senior Backend Engineer  (Fernhill Systems)
+ 63  Lead Platform Engineer  (Quillon Data)
+ 60  Senior Data Engineer  (Larkspur Analytics)
+ 54  Senior DevOps Engineer  (Marlowe Cloudworks)
+  0  Customer Support Specialist  (Bluepine Travel)
+  0  Marketing Manager  (Sunvale Foods)
+  0  Accountant  (Meadowlark Studio)

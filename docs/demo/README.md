@@ -1,5 +1,11 @@
 # Demo screenshots and transcripts
 
+**Status:** `01-swagger-overview.png` (a headless browser capture of the page only, so no address bar,
+tabs or profile) and the three transcripts `03-matches.txt`, `04-explanation.txt` and `05-seed.txt`
+(a real run on 2026-11-24, password redacted) are committed. The terminal PNGs `03` to `05` and
+the Swagger response shot `02` below were **not** taken: the transcripts replace the terminal ones,
+and the table remains the recipe if you want to add them.
+
 Everything here comes from the **invented** demo data only: the demo account, the 20 invented posts
 of `tests/fixtures/demo/demo_jobs.json` and the invented persona Alex
 (`tests/fixtures/cv/alex_example.txt`). No real CV, no real feed and no real company appears.
