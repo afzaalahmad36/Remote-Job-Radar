@@ -190,6 +190,14 @@ scorer version with a new protocol. Hypotheses (not findings): stub posts withou
 1,800-character embedding window, dictionary gaps. Full protocol, tables and limits:
 [docs/MATCHING.md](docs/MATCHING.md), sections 10 and 12.
 
+*Note, 2026-11-24:* the demo showed three short stub posts scoring 100 for the synthetic Alex CV: the
+job's whole short stack is on the CV, and the list-style stub has too few English function words to
+be recognised as English, so the embedding is skipped. This is documented scorer behaviour, observed
+in the demo. It is a concrete example for the hypothesis that stub posts hurt the ranking, **not a
+measured cause**. A fix (for example a minimum amount of job information before a skills-only score
+can be high) would be a new `SCORER_VERSION` in a separate PR with a new protocol, new sheets and new
+labels.
+
 ### Method, in short
 
 The protocol was fixed and committed **before** any label existed; labelling was blind (no rank,
@@ -246,6 +254,14 @@ transaction. A `pg_dump` backup contains the `cvs` table, so keep backups outsid
 - **The matching FAIL.** The scorer was evaluated against a rule fixed in advance and missed it.
   The result was published, with the random baseline, and nothing was re-tuned. Lesson: a rule fixed
   before the data is only worth something if you keep it when the result is bad.
+
+## What I would do next
+
+1. **Stop stub posts topping the list.** Require a minimum amount of job information before a
+   skills-only score can be high (see the note under [Matching](#matching)). That is a new
+   `SCORER_VERSION` in a separate PR, with a new protocol, new sheets and new labels.
+2. **A Next.js dashboard** (Phase 6) over the existing API.
+3. **Application tracking and drafts** (Phase 5), template-based or with a local model only.
 
 ## What is not built
 
