@@ -114,3 +114,131 @@ Levels: `intern junior mid senior lead principal`. Policies: `remote hybrid onsi
 `year month week day hour`. A minimum salary needs an amount, a 3-letter currency and a period
 together (`422` otherwise). The notes are personal data: emails, phone numbers and links in them
 are masked like in a CV, and they are never logged or sent to a model.
+
+## Walkthrough on Windows (PowerShell + `curl.exe`)
+
+The same flow from the start, for **Windows PowerShell 5.1** or PowerShell 7, using only the
+invented persona Alex (`tests/fixtures/cv/alex_example.txt`) and the invented demo posts. Type
+`curl.exe`, not `curl`: in Windows PowerShell 5.1 `curl` is an alias of `Invoke-WebRequest`, which
+takes different options.
+
+**Before you start**, the API must be running (`docker compose up --build`) and the demo account
+must exist. Seed it from the repository root (the database has to be reachable from the host: see
+"Reaching the database from the host" in `CLAUDE.md`, section 10):
+
+```powershell
+uv run python -m scripts.seed_demo          # prints the demo login ONCE: copy the password
+```
+
+The seed script stores about 20 invented posts and runs the extraction rules on them. It does not
+embed or score: that is the background stack's job (steps 5 and 6 below say how to wait for it).
+`--demo-password` gives a fixed, public password instead; use it only on a throwaway local
+database.
+
+### 1. Register and log in
+
+JSON bodies go through a file, because quotes inside a PowerShell string are easy to get wrong.
+`[System.IO.File]::WriteAllText` writes UTF-8 **without** a byte-order mark; in Windows PowerShell
+5.1, `Set-Content -Encoding utf8` adds one and the API would reject the body.
+
+```powershell
+$base = "http://localhost:8000/api/v1"
+$tmp  = Join-Path $env:TEMP "jobradar-body.json"
+
+# Optional: your own new account (it has no jobs until it has a source).
+[System.IO.File]::WriteAllText($tmp, '{"email": "alex.demo@example.com", "password": "correct-horse-battery"}')
+curl.exe -s -X POST "$base/auth/register" -H "Content-Type: application/json" -d "@$tmp"
+
+# The seeded demo account: use the password the seed script printed.
+$password = "PASTE-THE-PRINTED-PASSWORD"
+[System.IO.File]::WriteAllText($tmp, (@{ email = "demo@example.com"; password = $password } | ConvertTo-Json))
+$token = (curl.exe -s -X POST "$base/auth/login" -H "Content-Type: application/json" -d "@$tmp" | ConvertFrom-Json).access_token
+$auth  = "Authorization: Bearer $token"     # never print or paste $token anywhere
+```
+
+### 2. Upload the invented CV
+
+The body is the file itself (`--data-binary`), not a multipart form, so there is no `-F`.
+
+```powershell
+curl.exe -s -X PUT "$base/cv" -H $auth -H "Content-Type: text/plain" `
+  --data-binary "@tests\fixtures\cv\alex_example.txt" | ConvertFrom-Json | Select-Object source_format, char_count
+```
+
+The reply holds the stored text with the email, phone and links already masked
+(a link becomes `[link]`, and so on). The skills were read from it on upload:
+
+```powershell
+curl.exe -s "$base/cv/skills" -H $auth | ConvertFrom-Json | Select-Object -ExpandProperty skills
+```
+
+### 3. Save Alex's preferences
+
+`PUT` replaces everything, so send all the fields you want.
+
+```powershell
+$body = '{"seniority_levels": ["senior", "lead"], "remote_policies": ["remote"], "min_salary": 100000, "salary_currency": "USD", "salary_period": "year"}'
+[System.IO.File]::WriteAllText($tmp, $body)
+curl.exe -s -X PUT "$base/preferences" -H $auth -H "Content-Type: application/json" -d "@$tmp"
+```
+
+### 4. Wait until the scores are ready
+
+Scoring runs in the background and the API only reads stored scores. `state` is `pending` or
+`running` while it works and `up_to_date` when it is done. Jobs get their vectors from the
+5-minute embedding sweep, so on a fresh seed the first scores can take a few minutes, and only
+appear at all with `EMBEDDING_PROVIDER=fastembed` (without it the scores use skills only).
+
+```powershell
+do {
+  $state = (curl.exe -s "$base/matches/status" -H $auth | ConvertFrom-Json).state
+  Write-Host "scoring: $state"
+  if ($state -ne "up_to_date") { Start-Sleep -Seconds 15 }
+} while ($state -ne "up_to_date")
+```
+
+### 5. The ranked list
+
+```powershell
+$page = curl.exe -s "$base/matches?limit=10" -H $auth | ConvertFrom-Json
+$page.items | ForEach-Object { "{0,3}  {1}  ({2})" -f $_.score, $_.job.title, $_.job.company }
+```
+
+`score` is a rank for this CV from 0 to 100, **not** a probability. Expect a surprise on the demo
+data: the three short "stub" posts (a headline, a stack and a link) can score 100, because their
+whole stack is on Alex's CV and a list-style stub has too few English function words to be
+judged English, so the embedding is skipped
+(`notes: ["not_english"]` in the explanation of step 6). That is the scorer's documented
+behaviour on stub posts (`docs/MATCHING.md`, section 3), shown here on purpose, not hidden.
+
+Jobs that fail one of Alex's
+hard preferences are capped at 30 and hidden unless you add `&include_filtered=true`. Read
+`docs/MATCHING.md` (sections 10 and 12) for how weak this ranking is on the evaluation pool.
+
+### 6. One explanation
+
+```powershell
+$id = $page.items[0].job.id
+curl.exe -s "$base/matches/$id" -H $auth | ConvertFrom-Json | ConvertTo-Json -Depth 8
+```
+
+The explanation lists the job's skills that Alex has and lacks, each hard filter with the values it
+compared, the two score components, the weights and a sentence per note. It never holds CV text.
+
+### 7. Re-score on request
+
+Normally a CV, skills or preferences change re-scores by itself. To ask again by hand:
+
+```powershell
+curl.exe -s -X POST "$base/matches/rescore" -H $auth | ConvertFrom-Json | Select-Object status
+```
+
+`queued`, `already_pending` or `already_running`. Use step 4's loop to wait for `up_to_date`.
+
+### 8. Clean up
+
+```powershell
+curl.exe -s -X DELETE "$base/cv" -H $auth -o NUL -w "%{http_code}`n"   # 204: the CV and its matches are gone
+Remove-Item $tmp
+uv run python -m scripts.seed_demo --reset                              # drops the demo user and its posts
+```

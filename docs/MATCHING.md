@@ -925,3 +925,22 @@ repaired in place.
 - An English-only, int8 embedding model.
 - The scorer's code was tested on a frozen pool, not the Celery pipeline, the sweep or the API.
 - B is calibrated on the pool it is evaluated on (never on labels).
+
+### Dated note, 2026-11-24: stub posts seen scoring 100 in the demo
+
+Observed while running the demo (invented posts, `tests/fixtures/demo/demo_jobs.json`, and the
+synthetic Alex CV; not part of the evaluation of this section, whose results are unchanged):
+
+- Three short stub posts (a headline, a two-item stack, a link) scored **100**, above every full post.
+- Why: the whole short stack is on Alex's CV, so skill coverage is 1.0; and the stub, a list-style
+  text of 15 words or more with almost no English function words, is judged not English by
+  `looks_english`, so the embedding is skipped (`not_english`) and the skills take all the weight.
+  The stubs are in fact English. One explanation was read in the demo
+  (`docs/demo/04-explanation.txt`); `looks_english` returns false for the other stub texts too.
+- This is the documented scorer behaviour of section 3, observed in a demo.
+- It is a concrete example for the hypothesis that stub posts hurt the ranking, though a different
+  case from the one hypothesis 1 names (stubs with **no** stack: these have a short one). It is **not
+  a measured cause** of the result above.
+- Any fix (for example a minimum amount of job information before a skills-only score can be high)
+  would be a new `SCORER_VERSION` in a separate PR, with a new protocol, new sheets and new labels.
+

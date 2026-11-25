@@ -1,0 +1,11 @@
+# Real run, 2026-11-24, on the invented demo data only (demo account, invented persona Alex).
+# Output of the walkthrough in docs/API_EXAMPLES.md; blank lines removed, secrets never printed.
+
+PS> uv run python -m scripts.seed_demo --reset
+Database: localhost:5434/jobradar
+Deleted 1 demo user(s).
+Posts stored: 20 new, 20 in total.
+Posts with a title after the rules phase: 20 of 20.
+Demo login: demo@example.com / <password hidden>
+This password is shown once and not stored anywhere else.
+Embeddings and scores come from the running stack (see docs/API_EXAMPLES.md).
