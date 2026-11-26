@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same PR cancels the run that is still in progress; runs on main never are.
+# A newer push to the same PR cancels the run that is still in progress. Runs on main are grouped
+# by commit, so nothing cancels them: not even a PR run that starts after its PR was merged (that
+# one can report main as its ref, which is why the group does not use github.ref).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
