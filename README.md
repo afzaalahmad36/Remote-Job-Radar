@@ -103,10 +103,12 @@ to the LLM client is enforced by code and tests, not by convention: see [Privacy
 
 ## Run it
 
-Requirements: Docker Desktop and Git. No API key is needed.
+Requirements: Docker Desktop and Git; the demo seed below also needs [uv](https://docs.astral.sh/uv/).
+No API key is needed.
 
 ```bash
-git clone <this repository> && cd Remote-Job-Radar
+git clone https://github.com/afzaalahmad36/Remote-Job-Radar.git
+cd Remote-Job-Radar
 cp .env.example .env          # on Windows PowerShell: Copy-Item .env.example .env
 docker compose up --build
 ```
@@ -127,18 +129,42 @@ docker compose up --build
 **Try it with invented data** (no real feed, no real CV): seed a demo account with about 20 invented
 posts, then follow the PowerShell walkthrough in [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md).
 
-```bash
+The seed script runs **on your machine, not inside a container**, and Compose publishes no database
+port, so first publish it with a local override file. Create `docker-compose.override.yml` next to
+`docker-compose.yml` (Git ignores it; Compose picks it up by itself):
+
+```yaml
+services:
+  db:
+    ports:
+      - "127.0.0.1:5434:5432"   # this machine only
+```
+
+Then start the stack again, wait until it is healthy (the API creates the tables), and seed.
+PowerShell:
+
+```powershell
+docker compose up --build -d --wait
 uv sync
+$env:DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar"
 uv run python -m scripts.seed_demo     # prints the demo login ONCE (a random password)
 ```
 
-The script runs **from your host, not inside a container**, so the database must be reachable on
-`localhost`: create the local, git-ignored `docker-compose.override.yml` that publishes the db port
-and set `DATABASE_URL` to match (see [CLAUDE.md](CLAUDE.md), section 10). It writes only to a
-database named `jobradar` on this machine, refuses `ENV=production`
-and makes no network or provider request. `--demo-password` gives a fixed, **public** password
-(`demo@example.com` / `demo-password-local-only`) for a throwaway local database only. Screenshots
-and transcripts of the demo are in [docs/demo/](docs/demo/).
+bash:
+
+```bash
+docker compose up --build -d --wait
+uv sync
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar
+uv run python -m scripts.seed_demo     # prints the demo login ONCE (a random password)
+```
+
+If port 5434 is taken, change it in both places. Delete the override file to close the port again.
+
+The seed script writes only to a database named `jobradar` on this machine, refuses
+`ENV=production` and makes no network or provider request. `--demo-password` gives a fixed,
+**public** password (`demo@example.com` / `demo-password-local-only`) for a throwaway local database
+only. Screenshots and transcripts of the demo are in [docs/demo/](docs/demo/).
 
 Development commands (tests, lint, migrations, host-run workers on Windows) are in
 [CLAUDE.md](CLAUDE.md), section 10.
@@ -284,8 +310,8 @@ transaction. A `pg_dump` backup contains the `cvs` table, so keep backups outsid
 | 2 | Auth, sources, RSS ingestion with dedupe | Done (Telegram deferred) |
 | 3 | Rules-first extraction, optional LLM, budgets, accuracy evaluation | Done (90% target not met) |
 | 4 | CV, embeddings, matching, evaluation, demo | Done (matching evaluation failed) |
-| 5 | Application tracker and email drafts | Next |
-| 6 | Next.js dashboard | Planned |
+| 5 | Application tracker and email drafts | Planned, after Phase 6 |
+| 6 | Next.js dashboard | Next |
 | 7 | Hardening, observability, deployment | Planned |
 
 ## Repository guide
@@ -294,3 +320,7 @@ transaction. A `pg_dump` backup contains the `cvs` table, so keep backups outsid
 [docs/ACCURACY.md](docs/ACCURACY.md), [docs/MATCHING.md](docs/MATCHING.md),
 [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) cover
 measurement, matching, the API and deployment.
+
+## License
+
+[MIT](LICENSE), © 2026 Afzaal Ahmad.
