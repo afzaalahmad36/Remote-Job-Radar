@@ -122,11 +122,13 @@ invented persona Alex (`tests/fixtures/cv/alex_example.txt`) and the invented de
 `curl.exe`, not `curl`: in Windows PowerShell 5.1 `curl` is an alias of `Invoke-WebRequest`, which
 takes different options.
 
-**Before you start**, the API must be running (`docker compose up --build`) and the demo account
-must exist. Seed it from the repository root (the database has to be reachable from the host: see
-"Reaching the database from the host" in `CLAUDE.md`, section 10):
+**Before you start**, publish the database port, start the stack and seed the demo account, all as
+described under "Run it" in the [README](../README.md#run-it). In short, from the repository root,
+with the override file in place:
 
 ```powershell
+docker compose up --build -d --wait
+$env:DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar"
 uv run python -m scripts.seed_demo          # prints the demo login ONCE: copy the password
 ```
 
