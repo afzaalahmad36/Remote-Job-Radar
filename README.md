@@ -320,3 +320,7 @@ transaction. A `pg_dump` backup contains the `cvs` table, so keep backups outsid
 [docs/ACCURACY.md](docs/ACCURACY.md), [docs/MATCHING.md](docs/MATCHING.md),
 [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) cover
 measurement, matching, the API and deployment.
+
+## License
+
+[MIT](LICENSE), © 2026 Afzaal Ahmad.
