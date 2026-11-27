@@ -1,7 +1,7 @@
 # Web dashboard (Phase 6)
 
-Next.js (App Router), TypeScript and Tailwind. So far only the setup: one placeholder page, a
-typed API wrapper and the tests. The browser will never call the API; the Next.js server does.
+Next.js (App Router), TypeScript and Tailwind. So far: register, sign in, sign out and an empty
+dashboard. The browser never calls the API; the Next.js server does.
 
 Needs Node 24 (`.nvmrc`). Commands, from this folder:
 
@@ -16,8 +16,36 @@ npx playwright install chromium   # once
 npm run build && npm run e2e      # Playwright against the production build
 ```
 
-Port 3000 must be free. The test that needs a backend (`e2e/stack.spec.ts`) runs only when
-`E2E_API_URL` is set and the demo account was seeded with `--demo-password` (see the root README).
+Open the site at exactly the address in `APP_ORIGIN` (`127.0.0.1` is not `localhost`), or signing
+in is refused.
+
+`npm run e2e` needs ports 3000, 3001 and 8765 free, and takes about a minute. Its tests:
+
+- `smoke.spec.ts`: pages load, with no backend at all.
+- `session.spec.ts`: sessions in the production build, against the stand-in `stub-api.mjs`. One
+  test waits 31 seconds on purpose.
+- `stack.spec.ts`: against a real API. Runs only when `E2E_API_URL` is set and the demo account
+  was seeded with `--demo-password` (see the root README). It leaves a `web-e2e-...` account behind.
+
+## How sign-in works
+
+The API returns tokens in the response body. Our server routes (`src/app/api/`) put them in
+httpOnly cookies, so page scripts cannot read them, and call the API for the browser.
+
+- **Forwarding:** only calls listed in `src/lib/server/allowlist.ts`.
+- **Refresh:** the API ends a session when a refresh token is used twice. So parallel requests share
+  one refresh (`refresh.ts`), and its result is kept for 30 seconds for requests still on their way.
+- **CSRF:** a request that changes something must have `Origin` equal to `APP_ORIGIN`.
+- **Security policy:** `src/proxy.ts` allows only scripts carrying a per-request nonce, so every
+  page is rendered per request.
+
+Limits:
+
+- **One server process only.** The shared refresh lives in memory. With several instances (such as
+  serverless hosting), parallel requests can still sign a user out. To be solved before deployment.
+- For 30 seconds, a stolen old refresh token would get the new pair without being detected.
+- The API limits sign-in attempts per IP address, and all web users share the web server's.
+- After sign-out, an access token already issued keeps working at the API until it expires.
 
 ## ESLint version
 

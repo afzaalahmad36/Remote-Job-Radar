@@ -23,6 +23,13 @@ export default defineConfig([
   ...nextVitals,
   ...nextTypescript,
   { rules: privacyRules },
+  {
+    // Components run in the browser: server code (tokens, cookies) must not be pulled into them.
+    files: ["src/components/**"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: ["**/lib/server/*"] }],
+    },
+  },
   globalIgnores([
     ".next/**",
     "next-env.d.ts",
