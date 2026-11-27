@@ -10,7 +10,6 @@ from scripts import recompute_extractions as script
 from scripts.db_guard import ScriptError
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-LOCAL = "postgresql+asyncpg://u:p@localhost:5434/jobradar"
 
 
 @pytest.mark.parametrize(("version", "number"), [("rules_v1", 1), ("rules_v12", 12)])
@@ -52,27 +51,6 @@ def test_a_batch_size_outside_the_range_is_refused() -> None:
     for size in (0, script.MAX_BATCH_SIZE + 1):
         with pytest.raises(ScriptError, match="--batch-size"):
             asyncio.run(script.recompute(None, batch_size=size))  # type: ignore[arg-type]
-
-
-def test_only_the_local_jobradar_database_is_allowed() -> None:
-    assert script.check_local_database(LOCAL) == "localhost:5434/jobradar"
-    assert script.check_local_database(LOCAL.replace("localhost", "127.0.0.1")).startswith(
-        "127.0.0.1"
-    )
-
-
-@pytest.mark.parametrize(
-    ("url", "reason"),
-    [
-        (LOCAL.replace("/jobradar", "/jobradar_test"), "named 'jobradar'"),
-        (LOCAL.replace("/jobradar", "/other"), "named 'jobradar'"),
-        (LOCAL.replace("localhost", "db.example.com"), "this machine"),
-        ("not a url", "valid database URL"),
-    ],
-)
-def test_a_wrong_database_name_or_a_remote_host_is_refused(url: str, reason: str) -> None:
-    with pytest.raises(ScriptError, match=reason):
-        script.check_local_database(url)
 
 
 def test_no_app_code_imports_the_script() -> None:

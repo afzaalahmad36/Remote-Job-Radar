@@ -40,7 +40,6 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -49,7 +48,7 @@ from app.core.security import hash_password
 from app.extraction.text_hash import raw_text_hash
 from app.models import ExtractionStatus, Job, Source, SourceType, User
 from app.services.extraction_service import extract_job
-from scripts.db_guard import ScriptError, database_target
+from scripts.db_guard import ScriptError, local_database_target
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "tests" / "fixtures" / "demo" / "demo_jobs.json"
@@ -59,7 +58,6 @@ DEMO_EMAIL = "demo@example.com"
 DEMO_FIXED_PASSWORD = "demo-password-local-only"  # noqa: S105
 SOURCE_NAME = "Demo feed (invented posts)"
 SOURCE_URL = "https://example.com/demo-feed.xml"  # never fetched: the source is inactive
-LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 class DemoJob(BaseModel):
@@ -102,11 +100,7 @@ def check_target(settings: Settings) -> str:
     """ "host:port/name" if this is the local `jobradar` database and not production."""
     if settings.env == "production":
         raise ScriptError("refusing to run with ENV=production: the demo account is for local use")
-    target = database_target(settings.database_url)
-    host = make_url(settings.database_url).host or "localhost"
-    if host not in LOCAL_HOSTS:
-        raise ScriptError(f"refusing to write to {host}: this script only writes to this machine")
-    return target
+    return local_database_target(settings.database_url)
 
 
 async def delete_demo_user(factory: async_sessionmaker[AsyncSession]) -> int:
