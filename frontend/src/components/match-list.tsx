@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { MatchCard } from "@/components/match-card";
+import { ScoringStatus } from "@/components/scoring-status";
 import { callOurApi } from "@/lib/browser-api";
 import { type Filters, filtersAddress, matchesPath, PAGE_SIZE } from "@/lib/matches/filters";
 import type { MatchPage } from "@/lib/matches/format";
@@ -21,6 +22,9 @@ function Empty({ page, filters }: { page: MatchPage; filters: Filters }) {
         (see <code>docs/API_EXAMPLES.md</code>).
       </p>
     );
+  }
+  if (page.scoring.state === "pending" || page.scoring.state === "running") {
+    return <p>No scores to show yet.</p>;
   }
   const narrowed = filters.min !== null || filters.page > 1;
   return (
@@ -65,6 +69,8 @@ export function MatchList({ filters }: { filters: Filters }) {
   const [state, setState] = useState<State>(null);
   const [attempt, setAttempt] = useState(0);
   const path = matchesPath(filters);
+  // Reads the list again; what is on screen stays until the new answer arrives.
+  const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
     const controller = new AbortController(); // cancels the request if we leave the page
@@ -89,7 +95,7 @@ export function MatchList({ filters }: { filters: Filters }) {
           className="mt-3 underline"
           onClick={() => {
             setState(null);
-            setAttempt((n) => n + 1);
+            reload();
           }}
         >
           Try again
@@ -101,6 +107,7 @@ export function MatchList({ filters }: { filters: Filters }) {
   const { page } = state;
   return (
     <>
+      <ScoringStatus scoring={page.scoring} onChange={reload} />
       {page.items.length === 0 ? (
         <Empty page={page} filters={filters} />
       ) : (

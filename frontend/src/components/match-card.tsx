@@ -1,4 +1,5 @@
 // One ranked job. Everything from the post is shown as plain text (React escapes it).
+import { WhyThisScore } from "@/components/match-explanation";
 import { type Match, postedDate, REMOTE, salary, SENIORITY, warnings } from "@/lib/matches/format";
 import { safeMailLink, safeWebLink } from "@/lib/matches/links";
 
@@ -80,6 +81,7 @@ export function MatchCard({ match }: { match: Match }) {
           ))}
         </p>
       )}
+      <WhyThisScore jobId={job.id} />
     </article>
   );
 }
