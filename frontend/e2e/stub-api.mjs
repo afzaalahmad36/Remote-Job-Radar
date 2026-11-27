@@ -41,6 +41,7 @@ function newSession(email) {
 }
 
 const sessionOf = (token) => sessions.get(token?.split("-")[1]);
+const token = (authorization) => authorization?.replace("Bearer ", "");
 
 async function refresh(token) {
   refreshCalls += 1;
@@ -74,8 +75,13 @@ async function answer(method, path, body, authorization) {
   }
   if (path === "/api/v1/users/me" && method === "GET") {
     // As in the real API, an access token keeps working after sign-out.
-    const session = sessionOf(authorization?.replace("Bearer ", ""));
+    const session = sessionOf(token(authorization));
     return session ? [200, { email: session.email }] : [401, {}];
+  }
+  if (path.startsWith("/api/v1/matches") && method === "GET" && sessionOf(token(authorization))) {
+    // The list of a user without a CV: enough for the session tests.
+    const scoring = { state: "no_cv", failure_count: 0, max_attempts: 3 };
+    return [200, { items: [], total: 0, limit: 20, offset: 0, scoring }];
   }
   return [404, {}];
 }

@@ -17,7 +17,7 @@ and a written explanation. The CV is processed locally and **never reaches a hos
 
 This is a portfolio project, built phase by phase with tests alongside each feature. Phases 1 to 4
 are done (API, auth, ingestion, extraction, CV, embeddings, matching). The web dashboard is being
-built: so far it only does sign-in ([what is not built](#what-is-not-built)).
+built: so far sign-in and the match list ([what is not built](#what-is-not-built)).
 
 ## How it works
 
@@ -305,8 +305,9 @@ transaction. A `pg_dump` backup contains the `cvs` table, so keep backups outsid
 
 ## What is not built
 
-- **The dashboard pages.** The [web app](frontend/README.md) can register, sign in and sign out.
-  Matches, the CV and sources still go through the API and its Swagger page (Phase 6).
+- **The rest of the dashboard.** The [web app](frontend/README.md) does sign-in and shows the
+  ranked matches. The CV, preferences and sources still go through the API and its Swagger page
+  (Phase 6).
 - **Telegram ingestion.** The source type and interface exist; it needs a Telegram application and
   a user session, so it is deferred.
 - **Application drafting and tracking.** No application pipeline, status board or email drafts yet
