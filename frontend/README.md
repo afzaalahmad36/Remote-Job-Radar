@@ -42,4 +42,4 @@ uv run python -m scripts.export_openapi
 npm run gen:api
 ```
 
-A Python test fails if `openapi.json` is stale.
+A Python test fails if `openapi.json` is stale, and CI fails if the generated types are.
