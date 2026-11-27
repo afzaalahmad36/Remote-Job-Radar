@@ -1,7 +1,7 @@
 # Web dashboard (Phase 6)
 
-Next.js (App Router), TypeScript and Tailwind. So far: register, sign in, sign out and an empty
-dashboard. The browser never calls the API; the Next.js server does.
+Next.js (App Router), TypeScript and Tailwind. So far: register, sign in, sign out and the list of
+ranked matches. The browser never calls the API; the Next.js server does.
 
 Needs Node 24 (`.nvmrc`). Commands, from this folder:
 
@@ -24,8 +24,26 @@ in is refused.
 - `smoke.spec.ts`: pages load, with no backend at all.
 - `session.spec.ts`: sessions in the production build, against the stand-in `stub-api.mjs`. One
   test waits 31 seconds on purpose.
-- `stack.spec.ts`: against a real API. Runs only when `E2E_API_URL` is set and the demo account
-  was seeded with `--demo-password` (see the root README). It leaves a `web-e2e-...` account behind.
+- `stack.spec.ts` and `matches.spec.ts`: against a real stack (API, worker and database). They run
+  only when `E2E_API_URL` is set and the demo account was seeded with `--demo-password` (see the
+  root README). They leave a `web-e2e-...` account behind, and give the demo account the invented
+  CV of `tests/fixtures/cv`.
+
+## The match list
+
+The CV page is not built yet, so upload a CV through the API first
+([docs/API_EXAMPLES.md](../docs/API_EXAMPLES.md)).
+
+- **Score:** a rank for your CV, not a probability. The warnings under it (such as "Skills only")
+  say how it was made; see [docs/MATCHING.md](../docs/MATCHING.md).
+- **Not every job is listed.** A job with nothing to compare (without an embedding model, one that
+  lists no technologies) has no score, and jobs that fail your preferences are hidden unless asked.
+- **Filters** are kept in the address. Filtering by source comes with the sources page.
+- **Scoring in progress:** the page checks for up to two minutes, then offers to check again.
+- **Apply links** come from job posts, which anyone can write. Only plain web links and single email
+  addresses are clickable (`src/lib/matches/links.ts`).
+- The shape of a score's explanation is written by hand in `src/lib/matches/explain.ts`, because
+  `openapi.json` only says "an object". Change it together with `app/matching/reasons.py`.
 
 ## How sign-in works
 

@@ -115,7 +115,7 @@ job-radar/
 │   ├── conftest.py
 │   └── *_helpers.py, fakes.py  # shared setup and test doubles
 ├── scripts/                    # manual CLI helpers: try_extraction, eval_label, eval_*, recompute_extractions, calibrate_similarity, eval_match_sheet / eval_match_label / eval_match_score (the matching evaluation, docs/MATCHING.md section 10), seed_demo (never run by CI or app code; the web-e2e CI job does run seed_demo), export_openapi (writes frontend/openapi.json; a test fails if it is stale), plus check_no_cv_files (run by pre-commit and by a test)
-└── frontend/                   # Next.js app (Phase 6: sign-in and sessions so far; see frontend/README.md). The browser never calls the API: src/lib/server/ holds tokens, refresh and the forwarding allow-list
+└── frontend/                   # Next.js app (Phase 6: sign-in and the match list so far; see frontend/README.md). src/lib/matches/explain.ts mirrors app/matching/reasons.py by hand. The browser never calls the API: src/lib/server/ holds tokens, refresh and the forwarding allow-list
 ```
 
 ---
