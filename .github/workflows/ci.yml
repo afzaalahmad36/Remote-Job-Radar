@@ -80,3 +80,68 @@ jobs:
 
       - name: Build image
         run: docker build --tag remote-job-radar:ci .
+
+  # Browser tests against the production build and a real stack: no LLM, no embedding model, no
+  # provider request. Scores here are therefore skills-only.
+  web-e2e:
+    runs-on: ubuntu-latest
+    # More than the other jobs until its real duration is known.
+    timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # The image is built with the Dockerfile's defaults (no model weights), then Compose uses it
+      # as it is (`--no-build`). `.env` is a throwaway copy of the example. The database port is
+      # published for the seed script, which runs on the runner. LLM_PROVIDER and
+      # EMBEDDING_PROVIDER stay `none`.
+      - name: Start the stack
+        run: |
+          cp .env.example .env
+          printf 'services:\n  db:\n    ports:\n      - "127.0.0.1:5434:5432"\n' > docker-compose.override.yml
+          docker build --tag remote-job-radar:dev .
+          docker compose up --no-build -d --wait --wait-timeout 300
+
+      - name: Seed the demo account
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar
+        run: |
+          uv sync --locked
+          uv run python -m scripts.seed_demo --demo-password
+
+      # A browser version belongs to a Playwright version, so the lockfile is the cache key.
+      # `playwright install` below downloads nothing when the cache already has the browser, and
+      # still installs the system packages it needs.
+      - name: Cache the Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Build the web app
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+
+      - name: Browser tests (Playwright)
+        working-directory: frontend
+        env:
+          E2E_API_URL: http://127.0.0.1:8000
+        run: npm run e2e
+
+      - name: Stack logs (only if something failed; the data is invented)
+        if: failure()
+        run: docker compose logs --tail 100

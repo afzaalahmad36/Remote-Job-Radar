@@ -42,3 +42,9 @@ docker-compose.override.yaml
 # outside the repository.
 *.pdf
 !tests/fixtures/cv/*.pdf
+
+# Frontend build and test output
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/

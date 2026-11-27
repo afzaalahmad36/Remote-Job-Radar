@@ -16,11 +16,17 @@ def jobs() -> dict[str, dict[str, Any]]:
     return result
 
 
-def test_every_ci_job_has_a_timeout_of_15_minutes_or_less(jobs: dict[str, Any]) -> None:
+# web-e2e builds an image, a stack and the web app, and may download a browser: allowed longer
+# until its real duration on GitHub is known.
+LONGER_JOBS = {"web-e2e": 25}
+
+
+def test_every_ci_job_has_a_short_timeout(jobs: dict[str, Any]) -> None:
     # Without one a hung step runs for GitHub's default 6 hours (a Celery test once did).
     assert jobs  # there are jobs to check
     for name, job in jobs.items():
-        assert 0 < job.get("timeout-minutes", 0) <= 15, f"job {name!r} needs timeout-minutes"
+        limit = LONGER_JOBS.get(name, 15)
+        assert 0 < job.get("timeout-minutes", 0) <= limit, f"job {name!r} needs timeout-minutes"
 
 
 def test_ci_has_no_redis_service_because_tests_never_use_one(jobs: dict[str, Any]) -> None:
