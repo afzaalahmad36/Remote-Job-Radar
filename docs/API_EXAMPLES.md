@@ -133,7 +133,7 @@ uv run python -m scripts.seed_demo          # prints the demo login ONCE: copy t
 ```
 
 The seed script stores about 20 invented posts and runs the extraction rules on them. It does not
-embed or score: that is the background stack's job (steps 5 and 6 below say how to wait for it).
+embed or score: that is the background stack's job (step 4 below shows how to wait for it).
 `--demo-password` gives a fixed, public password instead; use it only on a throwaway local
 database.
 

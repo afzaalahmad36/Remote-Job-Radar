@@ -104,34 +104,28 @@ to the LLM client is enforced by code and tests, not by convention: see [Privacy
 ## Run it
 
 Requirements: Docker Desktop and Git; the demo seed below also needs [uv](https://docs.astral.sh/uv/).
-No API key is needed.
+No API key is needed. Port 8000 must be free, and port 5434 too for the demo seed.
+
+**1. Clone and create `.env`.**
 
 ```bash
 git clone https://github.com/afzaalahmad36/Remote-Job-Radar.git
 cd Remote-Job-Radar
 cp .env.example .env          # on Windows PowerShell: Copy-Item .env.example .env
-docker compose up --build
 ```
 
-- **The first build is slow** (several minutes): the image bakes in the 66 MB embedding model
-  (`EMBEDDING_MODEL_DOWNLOAD=1`, the Compose default). To skip the download, run
-  `EMBEDDING_MODEL_DOWNLOAD=0 docker compose build` (PowerShell: `$env:EMBEDDING_MODEL_DOWNLOAD=0`
-  first); the stack then runs without embeddings.
-- The API is on <http://localhost:8000>, with interactive docs at <http://localhost:8000/docs>.
-  The database and Redis publish no ports.
-- **Embeddings and the LLM are off by default** (`EMBEDDING_PROVIDER=none`, `LLM_PROVIDER=none`,
-  `LLM_EXTRACTION_ENABLED=false`). The pipeline then runs on rules and skill overlap only. Set
-  `EMBEDDING_PROVIDER=fastembed` in `.env` to turn the real embeddings on. Turn the LLM on only if
-  you mean to; it needs a free Gemini key and a model name you look up yourself.
-- Set a real `SECRET_KEY` in `.env` for anything but a local try; in production the app refuses to
+**2. Decide these before the first start.**
+
+- For anything but a local try, set a real `SECRET_KEY` in `.env`; in production the app refuses to
   start with the placeholder.
-
-**Try it with invented data** (no real feed, no real CV): seed a demo account with about 20 invented
-posts, then follow the PowerShell walkthrough in [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md).
-
-The seed script runs **on your machine, not inside a container**, and Compose publishes no database
-port, so first publish it with a local override file. Create `docker-compose.override.yml` next to
-`docker-compose.yml` (Git ignores it; Compose picks it up by itself):
+- The first build is slow (several minutes): the image bakes in the 66 MB embedding model. To skip
+  the download, set `EMBEDDING_MODEL_DOWNLOAD=0` in the terminal first (bash:
+  `export EMBEDDING_MODEL_DOWNLOAD=0`, PowerShell: `$env:EMBEDDING_MODEL_DOWNLOAD = "0"`); the
+  stack then runs without embeddings.
+- For the demo seed: the seed script runs **on your machine, not inside a container**, and Compose
+  publishes no database port, so publish it with a local override file. Create
+  `docker-compose.override.yml` next to `docker-compose.yml` (Git ignores it; Compose picks it up by
+  itself):
 
 ```yaml
 services:
@@ -140,11 +134,27 @@ services:
       - "127.0.0.1:5434:5432"   # this machine only
 ```
 
-Then start the stack again, wait until it is healthy (the API creates the tables), and seed.
-PowerShell:
+**3. Start the stack.** This returns when the services are up (the API creates the tables):
+
+```bash
+docker compose up --build -d --wait
+```
+
+The API is on <http://localhost:8000>, with interactive docs at <http://localhost:8000/docs>. To
+follow the logs: `docker compose logs -f`.
+
+**Embeddings and the LLM are off by default** (`EMBEDDING_PROVIDER=none`, `LLM_PROVIDER=none`,
+`LLM_EXTRACTION_ENABLED=false`): the pipeline then runs on rules and skill overlap only. To turn the
+real embeddings on, set `EMBEDDING_PROVIDER=fastembed` in `.env` and run `docker compose up -d`
+again. This needs an image built **with** the model, so not with `EMBEDDING_MODEL_DOWNLOAD=0`. Turn
+the LLM on only if you mean to; it needs a free Gemini key and a model name you look up yourself.
+
+**4. Try it with invented data** (no real feed, no real CV). This seeds a demo account with about 20
+invented posts. Run the lines **in the same terminal**: without the `DATABASE_URL` line the script
+uses `.env`, which points at port 5432, not at this stack. The first run can take a couple of
+minutes. PowerShell:
 
 ```powershell
-docker compose up --build -d --wait
 uv sync
 $env:DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar"
 uv run python -m scripts.seed_demo     # prints the demo login ONCE (a random password)
@@ -153,18 +163,22 @@ uv run python -m scripts.seed_demo     # prints the demo login ONCE (a random pa
 bash:
 
 ```bash
-docker compose up --build -d --wait
 uv sync
 export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5434/jobradar
 uv run python -m scripts.seed_demo     # prints the demo login ONCE (a random password)
 ```
 
-If port 5434 is taken, change it in both places. Delete the override file to close the port again.
+If port 5434 is taken, change it in the override file and in `DATABASE_URL`. Then follow the
+PowerShell walkthrough in [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md).
 
 The seed script writes only to a database named `jobradar` on this machine, refuses
 `ENV=production` and makes no network or provider request. `--demo-password` gives a fixed,
 **public** password (`demo@example.com` / `demo-password-local-only`) for a throwaway local database
 only. Screenshots and transcripts of the demo are in [docs/demo/](docs/demo/).
+
+**5. Stop.** `docker compose down` stops and removes the containers and **keeps your data**.
+`docker compose down -v` also deletes the volumes, **including the database**. Delete the override
+file to stop publishing the database port.
 
 Development commands (tests, lint, migrations, host-run workers on Windows) are in
 [CLAUDE.md](CLAUDE.md), section 10.
