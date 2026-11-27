@@ -14,6 +14,11 @@ export default defineConfig({
     command: "npm run start",
     url: "http://127.0.0.1:3000",
     reuseExistingServer: false,
-    env: { NEXT_TELEMETRY_DISABLED: "1" },
+    env: {
+      NEXT_TELEMETRY_DISABLED: "1",
+      APP_ORIGIN: "http://127.0.0.1:3000",
+      // Without a backend, an address where nothing listens: the smoke tests need none.
+      API_INTERNAL_URL: process.env.E2E_API_URL ?? "http://127.0.0.1:9",
+    },
   },
 });
