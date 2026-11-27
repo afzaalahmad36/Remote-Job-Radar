@@ -81,6 +81,44 @@ jobs:
       - name: Build image
         run: docker build --tag remote-job-radar:ci .
 
+  # The web app on its own: no backend, no database, no secrets.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` installs exactly the lockfile and fails if package.json disagrees with it.
+      - name: Install dependencies
+        run: npm ci
+
+      # The Python job checks that openapi.json matches the API; this checks the types match it.
+      - name: API types are current
+        run: npm run gen:api && git diff --exit-code -- src/lib/api/schema.d.ts
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests (Vitest)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
   # Browser tests against the production build and a real stack: no LLM, no embedding model, no
   # provider request. Scores here are therefore skills-only.
   web-e2e:
