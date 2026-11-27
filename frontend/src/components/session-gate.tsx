@@ -6,26 +6,13 @@ import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 
 import type { components } from "@/lib/api/schema";
-import { errorCode, messageFor, UNAVAILABLE } from "@/lib/messages";
+import { callOurApi } from "@/lib/browser-api";
+import { errorCode, messageFor } from "@/lib/messages";
 
 type User = components["schemas"]["UserRead"];
 type State = { user: User } | { problem: string } | null; // null: still loading
 
 const SIGN_OUT_FAILED = "Signing out did not work. Try again.";
-
-async function loadUser(): Promise<{ user: User } | { problem: string } | { signIn: string }> {
-  try {
-    const response = await fetch("/api/v1/users/me", { cache: "no-store" });
-    if (response.ok) return { user: (await response.json()) as User };
-    const code = await errorCode(response);
-    if (response.status === 401) {
-      return { signIn: code === "session_ended" ? "/login?notice=session_ended" : "/login" };
-    }
-    return { problem: messageFor(code) };
-  } catch {
-    return { problem: UNAVAILABLE };
-  }
-}
 
 /** Where to go after signing out, or null if it did not happen. */
 async function requestSignOut(): Promise<string | null> {
@@ -68,10 +55,11 @@ export function SessionGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let stale = false; // the component went away, or a newer attempt started
-    void loadUser().then((result) => {
+    void callOurApi<User>("/api/v1/users/me").then((result) => {
       if (stale) return;
-      if ("signIn" in result) router.replace(result.signIn);
-      else setState(result);
+      if (result.kind === "signed_out") router.replace(result.signIn);
+      else if (result.kind === "ok") setState({ user: result.data });
+      else setState({ problem: messageFor(result.code) });
     });
     return () => {
       stale = true;

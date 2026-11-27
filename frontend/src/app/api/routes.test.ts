@@ -8,7 +8,7 @@ import { MAX_BODY_BYTES } from "@/lib/server/body";
 import { POST as login } from "./auth/login/route";
 import { POST as logout } from "./auth/logout/route";
 import { POST as register } from "./auth/register/route";
-import { GET as forward } from "./v1/[...path]/route";
+import { GET as forward, POST as forwardPost } from "./v1/[...path]/route";
 
 const ORIGIN = "http://127.0.0.1:3000";
 const fetchMock = vi.fn<typeof fetch>();
@@ -226,6 +226,59 @@ describe("forwarding", () => {
 
     expect(await response.json()).toEqual({ code: "not_signed_in" });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("passes on the allowed query parameters only", async () => {
+    api({ matches: () => json(200, { items: [] }) });
+    const request = new NextRequest(`${ORIGIN}/api/v1/matches?limit=20&min_score=60&source_id=x`, {
+      headers: { cookie: SESSION },
+    });
+
+    await forward(request, { params: Promise.resolve({ path: ["matches"] }) });
+
+    expect(new URL(String(fetchMock.mock.calls[0]![0])).search).toBe("?limit=20&min_score=60");
+  });
+
+  const rescore = (headers: Record<string, string>) =>
+    forwardPost(
+      new NextRequest(`${ORIGIN}/api/v1/matches/rescore`, {
+        method: "POST",
+        headers: { cookie: SESSION, ...headers },
+        body: JSON.stringify({ user_id: "someone-else" }),
+      }),
+      { params: Promise.resolve({ path: ["matches", "rescore"] }) },
+    );
+
+  it("forwards a POST from our own page, without any body", async () => {
+    api({ "matches/rescore": () => json(202, { status: "queued" }) });
+
+    const response = await rescore({ origin: ORIGIN });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ status: "queued" });
+    const init = fetchMock.mock.calls[0]![1]!;
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("refuses a POST from elsewhere, without calling the API", async () => {
+    for (const headers of [{}, { origin: "https://evil.example" }]) {
+      expect((await rescore(headers as Record<string, string>)).status).toBe(403);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [404, 404, "not_found"],
+    [429, 429, "rate_limited"],
+    [503, 502, "api_unavailable"],
+  ])("turns a re-score's %i into %i %s", async (upstream, status, code) => {
+    api({ "matches/rescore": () => json(upstream, { code: "x" }) });
+
+    const response = await rescore({ origin: ORIGIN });
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ code });
   });
 
   it("answers 404 for a path that is not on the list", async () => {
