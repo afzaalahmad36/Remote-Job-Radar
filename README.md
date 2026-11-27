@@ -16,8 +16,8 @@ and a written explanation. The CV is processed locally and **never reaches a hos
 > method and limits are in [Results](#results).
 
 This is a portfolio project, built phase by phase with tests alongside each feature. Phases 1 to 4
-are done (API, auth, ingestion, extraction, CV, embeddings, matching); there is no frontend yet
-([what is not built](#what-is-not-built)).
+are done (API, auth, ingestion, extraction, CV, embeddings, matching). The web dashboard is being
+built: so far it only does sign-in ([what is not built](#what-is-not-built)).
 
 ## How it works
 
@@ -300,12 +300,13 @@ transaction. A `pg_dump` backup contains the `cvs` table, so keep backups outsid
 1. **Stop stub posts topping the list.** Require a minimum amount of job information before a
    skills-only score can be high (see the note under [Matching](#matching)). That is a new
    `SCORER_VERSION` in a separate PR, with a new protocol, new sheets and new labels.
-2. **A Next.js dashboard** (Phase 6) over the existing API.
+2. **Finish the Next.js dashboard** (Phase 6) over the existing API.
 3. **Application tracking and drafts** (Phase 5), template-based or with a local model only.
 
 ## What is not built
 
-- **A frontend.** There is no UI yet; the API and its Swagger page are the interface (Phase 6).
+- **The dashboard pages.** The [web app](frontend/README.md) can register, sign in and sign out.
+  Matches, the CV and sources still go through the API and its Swagger page (Phase 6).
 - **Telegram ingestion.** The source type and interface exist; it needs a Telegram application and
   a user session, so it is deferred.
 - **Application drafting and tracking.** No application pipeline, status board or email drafts yet
