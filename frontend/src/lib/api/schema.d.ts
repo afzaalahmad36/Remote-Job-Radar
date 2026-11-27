@@ -614,6 +614,8 @@ export interface components {
             job: components["schemas"]["MatchJobOut"];
             /** Missing Skills */
             missing_skills: string[];
+            /** Note Codes */
+            note_codes: ("filters_failed" | "no_job_stack" | "no_cv_skills" | "no_embedding" | "not_english" | "skills_truncated")[] | null;
             /** Score */
             score: number;
             /** Scorer Version */

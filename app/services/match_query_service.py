@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
-from app.matching.reasons import NOTE_MESSAGES, MatchReasons
+from app.matching.reasons import NOTE_MESSAGES, MatchReasons, Note
 from app.models import Job, JobMatch
 from app.repositories import match_repository as repo
 from app.services import match_status_service as status
@@ -78,11 +78,24 @@ async def get_match(
     return MatchDetailData(match, job, reasons, messages, await status.read_view(session, user_id))
 
 
-def _explanation(match: JobMatch) -> tuple[dict[str, object] | None, list[str]]:
-    """The stored explanation, checked against the current contract, with a sentence per note."""
+def _stored_reasons(match: JobMatch) -> MatchReasons | None:
+    """The stored explanation, checked against the current contract."""
     try:
-        reasons = MatchReasons.model_validate(match.reasons)
+        return MatchReasons.model_validate(match.reasons)
     except ValidationError:  # written by an older scorer: the next run replaces it
+        return None
+
+
+def note_codes(match: JobMatch) -> list[Note] | None:
+    """The notes of a stored match, or None if its explanation cannot be read."""
+    reasons = _stored_reasons(match)
+    return None if reasons is None else list(reasons.notes)
+
+
+def _explanation(match: JobMatch) -> tuple[dict[str, object] | None, list[str]]:
+    """The stored explanation as returned by the detail, with a sentence per note."""
+    reasons = _stored_reasons(match)
+    if reasons is None:
         return None, []
     return reasons.to_json(), [NOTE_MESSAGES[note] for note in reasons.notes]
 

@@ -69,6 +69,7 @@ async def list_matches(
                 missing_skills=list(match.missing_skills),
                 scorer_version=match.scorer_version,
                 updated_at=match.updated_at,
+                note_codes=match_query_service.note_codes(match),
             )
             for match, job in data.rows
         ],

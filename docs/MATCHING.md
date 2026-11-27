@@ -423,6 +423,11 @@ previous scores are returned unchanged, so a client can show them with an "updat
 CV the old scores stay visible, flagged pending, until the run replaces or removes them. After a
 deleted CV the matches are gone at once and the state is `no_cv`.
 
+Each item of the list also has `note_codes`: the note codes of its stored explanation (such as
+`no_embedding`, skills only), so a client can warn on the list without asking for each detail. `[]`
+means there is nothing to note; `null` means the stored explanation was written by an older scorer
+and cannot be read.
+
 `GET /matches` (ranked by score, then the newest job; `min_score`, `include_filtered`, `source_id`,
 `limit` up to 100, `offset`), `GET /matches/status` (cheap, for polling), `GET /matches/{job_id}` (the
 stored explanation exactly as stored, plus one fixed sentence per note; 404 for another user's job, a
