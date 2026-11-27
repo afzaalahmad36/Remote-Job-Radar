@@ -38,6 +38,7 @@ from tests.integration.test_match_service import (
     add_cv,
     add_job,
     add_user,
+    make_settings,
     two_jobs,
 )
 
@@ -431,6 +432,7 @@ def test_the_response_models_have_exactly_these_fields() -> None:
         "missing_skills",
         "scorer_version",
         "updated_at",
+        "note_codes",
     }
     assert set(MatchPage.model_fields) == {"items", "total", "limit", "offset", "scoring"}
     assert set(MatchDetailOut.model_fields) == {
@@ -478,6 +480,61 @@ async def test_the_json_the_endpoints_return_has_exactly_those_keys(
         "filters",
         "notes",
     }
+
+
+# --- note codes on the list --------------------------------------------------------------------
+
+
+async def listed_note_codes(client: AsyncClient, headers: dict[str, str]) -> dict[str, Any]:
+    body = (await client.get(MATCHES, params={"include_filtered": True}, headers=headers)).json()
+    return {item["job"]["id"]: item["note_codes"] for item in body["items"]}
+
+
+async def test_the_list_gives_each_match_its_note_codes(
+    db_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers, user_id = await signed_in(db_client, db_session)
+    await add_cv(db_session, user_id, skills=["Python"])
+    db_session.add(JobPreferences(user_id=user_id, remote_policies=[RemotePolicy.REMOTE]))
+    plain = await add_job(db_session, user_id, body=PYTHON_POST, stack=["Python"])
+    onsite = await add_job(
+        db_session,
+        user_id,
+        body=PYTHON_POST + " on site",
+        stack=["Python"],
+        remote_policy=RemotePolicy.ONSITE,
+    )
+    await score_jobs_for_user(db_session, user_id, SETTINGS)
+
+    codes = await listed_note_codes(db_client, headers)
+
+    assert codes == {str(plain.id): [], str(onsite.id): ["filters_failed"]}
+
+
+async def test_the_list_says_when_a_score_is_skills_only(
+    db_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers, user_id = await signed_in(db_client, db_session)
+    await add_cv(db_session, user_id, skills=["Python"], embedded=False)
+    job = await add_job(db_session, user_id, body=PYTHON_POST, stack=["Python"], embedded=False)
+    await score_jobs_for_user(db_session, user_id, make_settings(embedding_provider="none"))
+
+    assert await listed_note_codes(db_client, headers) == {str(job.id): ["no_embedding"]}
+
+
+async def test_an_unreadable_explanation_gives_null_codes_not_an_empty_list(
+    db_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers, user_id, (near, far) = await scored_user(db_client, db_session)
+    await db_session.execute(
+        update(JobMatch)
+        .where(JobMatch.user_id == user_id, JobMatch.job_id == near)
+        .values(reasons={"shape": "from an older scorer"})
+    )
+
+    codes = await listed_note_codes(db_client, headers)
+
+    assert codes == {str(near): None, str(far): []}
 
 
 # --- asking for a re-score ---------------------------------------------------------------------

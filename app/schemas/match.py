@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from app.matching.reasons import Note
 from app.models.job import RemotePolicy, SalaryPeriod, Seniority
 from app.schemas.pagination import Page
 from app.services.match_query_service import RescoreOutcome
@@ -58,6 +59,10 @@ class MatchOut(BaseModel):
     missing_skills: list[str]  # the job's own stack entries the CV lacks
     scorer_version: str
     updated_at: datetime  # when this score was last rewritten
+    # How the score was made, as fixed codes (such as "no_embedding": skills only), so a list can
+    # warn without asking for each detail. None: the stored explanation cannot be read by this
+    # version, which is not the same as "nothing to warn about" ([]).
+    note_codes: list[Note] | None
 
 
 class MatchPage(Page[MatchOut]):

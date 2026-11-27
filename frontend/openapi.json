@@ -634,6 +634,28 @@
             "title": "Missing Skills",
             "type": "array"
           },
+          "note_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "filters_failed",
+                    "no_job_stack",
+                    "no_cv_skills",
+                    "no_embedding",
+                    "not_english",
+                    "skills_truncated"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Codes"
+          },
           "score": {
             "title": "Score",
             "type": "integer"
@@ -654,7 +676,8 @@
           "filters_failed",
           "missing_skills",
           "scorer_version",
-          "updated_at"
+          "updated_at",
+          "note_codes"
         ],
         "title": "MatchOut",
         "type": "object"
