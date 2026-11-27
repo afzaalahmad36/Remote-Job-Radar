@@ -27,7 +27,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import Integer, case, cast, func, select, update
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql.elements import ColumnElement
@@ -35,12 +34,11 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.core.config import get_settings
 from app.extraction.rules import RULES_VERSION
 from app.models import ExtractionMethod, ExtractionStatus, Job, LlmEnrichment
-from scripts.db_guard import ScriptError, database_target
+from scripts.db_guard import ScriptError, local_database_target
 
 logger = logging.getLogger("recompute_extractions")
 
 CONFIRM_FLAG = "--confirm-backup-taken"
-LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 DEFAULT_BATCH_SIZE = 100  # what the sweep queues per run
 MAX_BATCH_SIZE = 1_000
 VERSION_PATTERN = r"^rules_v[0-9]{1,6}$"  # "rules_v2"; anything else is never reset
@@ -180,15 +178,6 @@ async def recompute(
     return RecomputeResult(candidates, batches)
 
 
-def check_local_database(database_url: str) -> str:
-    """ "host:port/name" if this is the local `jobradar` database; ScriptError otherwise."""
-    target = database_target(database_url)  # the name must be jobradar
-    host = make_url(database_url).host or "localhost"
-    if host not in LOCAL_HOSTS:
-        raise ScriptError(f"refusing to write to {host}: this script only writes to this machine")
-    return target
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="recompute_extractions",
@@ -212,7 +201,7 @@ def _print_counts(candidates: Candidates, current_version: str) -> None:
 
 
 async def _run(database_url: str, args: argparse.Namespace) -> int:
-    target = check_local_database(database_url)
+    target = local_database_target(database_url)
     print(f"Database: {target}  (current rules version: {RULES_VERSION})")
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
