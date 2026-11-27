@@ -1,6 +1,7 @@
 """Load a demo account with about 20 invented job posts, to try the API without a real feed.
 
-Run by hand, never by CI or app code. It makes no provider request and no network request.
+Run by hand, or by the web-e2e CI job on its throwaway stack; never by app code. It makes no
+provider request and no network request.
 
 What it does:
 

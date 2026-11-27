@@ -114,8 +114,8 @@ job-radar/
 │   ├── integration/
 │   ├── conftest.py
 │   └── *_helpers.py, fakes.py  # shared setup and test doubles
-├── scripts/                    # manual CLI helpers: try_extraction, eval_label, eval_*, recompute_extractions, calibrate_similarity, eval_match_sheet / eval_match_label / eval_match_score (the matching evaluation, docs/MATCHING.md section 10), seed_demo (never run by CI or app code), plus check_no_cv_files (run by pre-commit and by a test)
-└── frontend/                   # Next.js app (not built yet, Phase 6)
+├── scripts/                    # manual CLI helpers: try_extraction, eval_label, eval_*, recompute_extractions, calibrate_similarity, eval_match_sheet / eval_match_label / eval_match_score (the matching evaluation, docs/MATCHING.md section 10), seed_demo (never run by CI or app code; the web-e2e CI job does run seed_demo), export_openapi (writes frontend/openapi.json; a test fails if it is stale), plus check_no_cv_files (run by pre-commit and by a test)
+└── frontend/                   # Next.js app (Phase 6, so far only the setup; see frontend/README.md)
 ```
 
 ---
@@ -419,6 +419,10 @@ uv run celery -A app.tasks.celery_app worker -l info -P solo
 uv run ruff check . --fix && uv run ruff format .
 uv run mypy app
 uv run pytest -q --cov=app
+
+# web app (Node 24, in frontend/): npm ci, npm run lint, npm run typecheck, npm test,
+# npm run build && npm run e2e. After an API change: `uv run python -m scripts.export_openapi`,
+# then `npm run gen:api` in frontend/ (see frontend/README.md).
 
 # migrations
 uv run alembic revision --autogenerate -m "describe change"
